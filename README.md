@@ -79,6 +79,7 @@ pi install git:github.com/IgorWarzocha/pi-codex-conversion
 The adapter does not build a standalone replacement prompt anymore. Instead it:
 
 - keeps Pi's tool descriptions, Pi docs section, AGENTS/project context, skills inventory, and date/cwd when Pi already surfaced them
+- adds the current shell to the transformed prompt so quoting and escaping can match the runtime environment
 - rewrites the top-level role framing to Codex-style wording
 - adds a small Codex delta to the existing `Guidelines` section
 
