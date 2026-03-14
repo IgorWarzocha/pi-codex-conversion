@@ -59,10 +59,16 @@ Raw command output is still available by expanding the tool result.
 ## Install
 
 ```bash
+pi install npm:@howaboua/pi-codex-conversion
+```
+
+Local development:
+
+```bash
 pi install ./pi-codex-conversion
 ```
 
-From GitHub:
+Alternative Git install:
 
 ```bash
 pi install git:github.com/IgorWarzocha/pi-codex-conversion

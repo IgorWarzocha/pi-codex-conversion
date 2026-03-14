@@ -1,5 +1,5 @@
 {
-  "name": "pi-codex-conversion",
+  "name": "@howaboua/pi-codex-conversion",
   "version": "1.0.0",
   "description": "Codex-oriented tool and prompt adapter for pi coding agent",
   "type": "module",
