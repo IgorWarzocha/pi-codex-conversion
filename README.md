@@ -7,7 +7,7 @@ This package replaces Pi's default Codex/GPT experience with a narrower Codex-li
 - swaps active tools to `exec_command`, `write_stdin`, `apply_patch`, and `view_image`
 - preserves Pi's composed system prompt and applies a narrow Codex-oriented delta on top
 - renders exec activity with Codex-style command and background-terminal labels
-![Available tools](./available%20tools.png)
+![Available tools](./available-tools.png)
 
 ## Active tools in adapter mode
 
