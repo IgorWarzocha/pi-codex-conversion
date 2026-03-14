@@ -31,9 +31,8 @@ export function registerApplyPatchTool(pi: ExtensionAPI): void {
 	pi.registerTool({
 		name: "apply_patch",
 		label: "apply_patch",
-		description:
-			"Apply a Codex-style patch. Input must be a single patch string using markers like *** Begin Patch, *** Update File:, @@, and *** End Patch.",
-		promptSnippet: "Apply a Codex-style textual patch across one or more files.",
+		description: "Use `apply_patch` to edit files. Send the full patch in `patch`.",
+		promptSnippet: "Edit files with a patch.",
 		promptGuidelines: ["Prefer apply_patch for focused textual edits instead of rewriting whole files."],
 		parameters: APPLY_PATCH_PARAMETERS,
 		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
