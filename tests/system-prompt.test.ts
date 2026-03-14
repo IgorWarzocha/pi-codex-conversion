@@ -36,7 +36,7 @@ Current date: 2026-03-14
 Current working directory: /tmp/example-workspace`;
 
 test("buildCodexSystemPrompt preserves Pi-composed sections and adds a narrow Codex delta", () => {
-	const prompt = buildCodexSystemPrompt(PI_BASE_PROMPT);
+	const prompt = buildCodexSystemPrompt(PI_BASE_PROMPT, { shell: "/bin/fish" });
 
 	assert.match(prompt, /^You are Codex running inside pi, a coding agent harness\./);
 	assert.match(prompt, /^Available tools:\n- exec_command: Run a command\./m);
@@ -44,6 +44,7 @@ test("buildCodexSystemPrompt preserves Pi-composed sections and adds a narrow Co
 	assert.match(prompt, /^# Project Context$/m);
 	assert.match(prompt, /^## AGENTS\.md$/m);
 	assert.match(prompt, /^# Skills$/m);
+	assert.match(prompt, /^Current shell: \/bin\/fish$/m);
 	assert.match(prompt, /^Current date: 2026-03-14$/m);
 	assert.match(prompt, /^Current working directory: \/tmp\/example-workspace$/m);
 	assert.match(prompt, /- Use `parallel` only when tool calls are independent and can safely run at the same time\./);
@@ -52,9 +53,12 @@ test("buildCodexSystemPrompt preserves Pi-composed sections and adds a narrow Co
 });
 
 test("buildCodexSystemPrompt appends fallback guidance when the base prompt has no Guidelines section", () => {
-	const prompt = buildCodexSystemPrompt(`Custom prompt\n\nCurrent date: 2026-03-14\nCurrent working directory: /tmp/example-workspace`);
+	const prompt = buildCodexSystemPrompt(`Custom prompt\n\nCurrent date: 2026-03-14\nCurrent working directory: /tmp/example-workspace`, {
+		shell: "/bin/zsh",
+	});
 
 	assert.match(prompt, /Codex mode guidelines:/);
+	assert.match(prompt, /^Current shell: \/bin\/zsh$/m);
 	assert.match(prompt, /^Current date: 2026-03-14$/m);
 });
 
@@ -87,6 +91,20 @@ Current working directory: /tmp/example-workspace`,
 	assert.match(prompt, /^### Fallback$/m);
 	assert.match(prompt, /- If a skill is missing or its path cannot be read/);
 	assert.match(prompt, /<\/skills_instructions>/);
+});
+
+test("buildCodexSystemPrompt does not duplicate an existing shell line", () => {
+	const prompt = buildCodexSystemPrompt(
+		`Prompt
+
+Current shell: /bin/bash
+Current date: 2026-03-14
+Current working directory: /tmp/example-workspace`,
+		{ shell: "/bin/fish" },
+	);
+
+	assert.equal(prompt.match(/^Current shell:/gm)?.length, 1);
+	assert.match(prompt, /^Current shell: \/bin\/bash$/m);
 });
 
 test("extractPiPromptSkills reads Pi-style available_skills inventory", () => {

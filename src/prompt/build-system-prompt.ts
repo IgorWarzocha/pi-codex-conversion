@@ -30,6 +30,13 @@ function insertBeforeTrailingContext(prompt: string, section: string): string {
 	return `${prompt}\n\n${section}`;
 }
 
+function injectShell(prompt: string, shell?: string): string {
+	if (!shell || /\nCurrent shell:/.test(prompt)) {
+		return prompt;
+	}
+	return insertBeforeTrailingContext(prompt, `Current shell: ${shell}`);
+}
+
 function decodeXml(text: string): string {
 	return text
 		.replace(/&apos;/g, "'")
@@ -106,6 +113,6 @@ function injectGuidelines(prompt: string): string {
 	return `${prompt.slice(0, match.index)}${replacement}${prompt.slice(match.index + match[0].length)}`;
 }
 
-export function buildCodexSystemPrompt(basePrompt: string, options: { skills?: PromptSkill[] } = {}): string {
-	return injectSkills(injectGuidelines(rewriteIntro(basePrompt)), options.skills ?? []);
+export function buildCodexSystemPrompt(basePrompt: string, options: { skills?: PromptSkill[]; shell?: string } = {}): string {
+	return injectShell(injectSkills(injectGuidelines(rewriteIntro(basePrompt)), options.skills ?? []), options.shell);
 }

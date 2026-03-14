@@ -65,7 +65,12 @@ export default function codexConversion(pi: ExtensionAPI) {
 		if (!isCodexLikeContext(ctx)) {
 			return undefined;
 		}
-		return { systemPrompt: buildCodexSystemPrompt(event.systemPrompt, { skills: state.promptSkills }) };
+		return {
+			systemPrompt: buildCodexSystemPrompt(event.systemPrompt, {
+				skills: state.promptSkills,
+				shell: process.env.SHELL || "/bin/bash",
+			}),
+		};
 	});
 }
 
