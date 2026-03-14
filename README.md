@@ -1,12 +1,13 @@
 # pi-codex-conversion
 
-Codex-oriented adapter for [Pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent).
+Codex-oriented adapter for [Pi](https://github.com/badlogic/pi-mono).
 
 This package replaces Pi's default Codex/GPT experience with a narrower Codex-like surface while staying close to Pi's own runtime and prompt construction:
 
 - swaps active tools to `exec_command`, `write_stdin`, `apply_patch`, and `view_image`
 - preserves Pi's composed system prompt and applies a narrow Codex-oriented delta on top
 - renders exec activity with Codex-style command and background-terminal labels
+![Available tools](./available%20tools.png)
 
 ## Active tools in adapter mode
 
