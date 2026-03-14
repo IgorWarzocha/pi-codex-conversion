@@ -15,6 +15,8 @@ interface AdapterState {
 	promptSkills: PromptSkill[];
 }
 
+const ADAPTER_TOOL_NAMES = [...CORE_ADAPTER_TOOL_NAMES, VIEW_IMAGE_TOOL_NAME];
+
 function getCommandArg(args: unknown): string | undefined {
 	if (!args || typeof args !== "object" || !("cmd" in args) || typeof args.cmd !== "string") {
 		return undefined;
@@ -80,7 +82,7 @@ function syncAdapter(pi: ExtensionAPI, ctx: ExtensionContext, state: AdapterStat
 }
 
 function enableAdapter(pi: ExtensionAPI, ctx: ExtensionContext, state: AdapterState): void {
-	const toolNames = getAdapterToolNames(ctx);
+	const toolNames = mergeAdapterTools(pi.getActiveTools(), getAdapterToolNames(ctx));
 	if (!state.enabled) {
 		// Preserve the previous active set once so switching away from Codex-like
 		// models restores the user's existing Pi tool configuration.
@@ -93,7 +95,8 @@ function enableAdapter(pi: ExtensionAPI, ctx: ExtensionContext, state: AdapterSt
 
 function disableAdapter(pi: ExtensionAPI, ctx: ExtensionContext, state: AdapterState): void {
 	if (state.enabled) {
-		pi.setActiveTools(state.previousToolNames && state.previousToolNames.length > 0 ? state.previousToolNames : DEFAULT_TOOL_NAMES);
+		const previousToolNames = state.previousToolNames && state.previousToolNames.length > 0 ? state.previousToolNames : DEFAULT_TOOL_NAMES;
+		pi.setActiveTools(restoreTools(previousToolNames, pi.getActiveTools()));
 		state.enabled = false;
 	}
 	setStatus(ctx, false);
@@ -109,4 +112,19 @@ function getAdapterToolNames(ctx: ExtensionContext): string[] {
 		return [...CORE_ADAPTER_TOOL_NAMES, VIEW_IMAGE_TOOL_NAME];
 	}
 	return [...CORE_ADAPTER_TOOL_NAMES];
+}
+
+export function mergeAdapterTools(activeTools: string[], adapterTools: string[]): string[] {
+	const preservedTools = activeTools.filter((toolName) => !DEFAULT_TOOL_NAMES.includes(toolName) && !ADAPTER_TOOL_NAMES.includes(toolName));
+	return [...adapterTools, ...preservedTools];
+}
+
+export function restoreTools(previousTools: string[], activeTools: string[]): string[] {
+	const restored = [...previousTools];
+	for (const toolName of activeTools) {
+		if (!ADAPTER_TOOL_NAMES.includes(toolName) && !restored.includes(toolName)) {
+			restored.push(toolName);
+		}
+	}
+	return restored;
 }
