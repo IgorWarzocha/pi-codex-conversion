@@ -32,14 +32,6 @@ export function renderWriteStdinCall(
 	return text;
 }
 
-export function renderWebSearchActivity(count: number, theme: RenderTheme, expanded = false): string {
-	let text = `${theme.fg("dim", "•")} ${theme.bold("Searched the web")}`;
-	if (expanded && count > 1) {
-		text += `\n${theme.fg("dim", "  └ ")}${theme.fg("muted", `${count} web searches in this turn`)}`;
-	}
-	return text;
-}
-
 function renderExplorationText(actions: ShellAction[], state: ExecCommandStatus, theme: RenderTheme): string {
 	const header = state === "running" ? "Exploring" : "Explored";
 	let text = `${theme.fg("dim", "•")} ${theme.bold(header)}`;

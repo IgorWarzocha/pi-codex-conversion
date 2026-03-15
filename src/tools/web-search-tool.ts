@@ -2,12 +2,13 @@ import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "@mariozechn
 import { Type } from "@sinclair/typebox";
 import { Box, Text } from "@mariozechner/pi-tui";
 import { isOpenAICodexModel } from "../adapter/codex-model.ts";
-import { renderWebSearchActivity } from "./codex-rendering.ts";
 
 export const WEB_SEARCH_UNSUPPORTED_MESSAGE = "web_search is only available with the openai-codex provider";
 const WEB_SEARCH_LOCAL_EXECUTION_MESSAGE =
 	"web_search is a native openai-codex provider tool and should not execute locally";
-export const WEB_SEARCH_ACTIVITY_MESSAGE_TYPE = "codex-web-search";
+export const WEB_SEARCH_SESSION_NOTE_TYPE = "codex-web-search-session-note";
+export const WEB_SEARCH_SESSION_NOTE_TEXT =
+	"Native OpenAI Codex web search is enabled for this session. Search runs silently and is not surfaced as a separate tool call.";
 
 const WEB_SEARCH_PARAMETERS = Type.Object({}, { additionalProperties: false });
 
@@ -21,12 +22,16 @@ interface ResponsesPayload {
 	[key: string]: unknown;
 }
 
-export interface WebSearchActivityDetails {
-	count: number;
-}
-
 export function supportsNativeWebSearch(model: ExtensionContext["model"]): boolean {
 	return isOpenAICodexModel(model);
+}
+
+export function shouldShowWebSearchSessionNote(
+	model: ExtensionContext["model"],
+	hasUI: boolean,
+	alreadyShown: boolean,
+): boolean {
+	return hasUI && !alreadyShown && supportsNativeWebSearch(model);
 }
 
 function isWebSearchFunctionTool(tool: unknown): tool is FunctionToolPayload {
@@ -66,22 +71,6 @@ export function rewriteNativeWebSearchTool(payload: unknown, model: ExtensionCon
 	};
 }
 
-export function payloadContainsWebSearchTool(payload: unknown): boolean {
-	if (!payload || typeof payload !== "object") {
-		return false;
-	}
-	const tools = (payload as ResponsesPayload).tools;
-	if (!Array.isArray(tools)) {
-		return false;
-	}
-	return tools.some(
-		(tool) =>
-			!!tool &&
-			typeof tool === "object" &&
-			(("type" in tool && (tool as { type?: unknown }).type === "web_search") || isWebSearchFunctionTool(tool)),
-	);
-}
-
 export function createWebSearchTool(): ToolDefinition<typeof WEB_SEARCH_PARAMETERS> {
 	return {
 		name: "web_search",
@@ -113,11 +102,11 @@ export function registerWebSearchTool(pi: ExtensionAPI): void {
 	pi.registerTool(createWebSearchTool());
 }
 
-export function registerWebSearchMessageRenderer(pi: ExtensionAPI): void {
-	pi.registerMessageRenderer<WebSearchActivityDetails>(WEB_SEARCH_ACTIVITY_MESSAGE_TYPE, (message, { expanded }, theme) => {
-		const count = typeof message.details?.count === "number" ? message.details.count : 1;
+export function registerWebSearchSessionNoteRenderer(pi: ExtensionAPI): void {
+	pi.registerMessageRenderer(WEB_SEARCH_SESSION_NOTE_TYPE, (_message, _options, theme) => {
 		const box = new Box(1, 1, (text) => theme.bg("toolSuccessBg", text));
-		box.addChild(new Text(renderWebSearchActivity(count, theme, expanded), 0, 0));
+		box.addChild(new Text(theme.bold("Web search enabled"), 0, 0));
+		box.addChild(new Text(`\n${theme.fg("dim", WEB_SEARCH_SESSION_NOTE_TEXT)}`, 0, 0));
 		return box;
 	});
 }

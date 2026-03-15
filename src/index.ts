@@ -8,12 +8,13 @@ import { createExecSessionManager } from "./tools/exec-session-manager.ts";
 import { buildCodexSystemPrompt, extractPiPromptSkills, type PromptSkill } from "./prompt/build-system-prompt.ts";
 import { registerViewImageTool, supportsOriginalImageDetail } from "./tools/view-image-tool.ts";
 import {
-	WEB_SEARCH_ACTIVITY_MESSAGE_TYPE,
-	payloadContainsWebSearchTool,
-	registerWebSearchMessageRenderer,
 	registerWebSearchTool,
+	registerWebSearchSessionNoteRenderer,
 	rewriteNativeWebSearchTool,
+	shouldShowWebSearchSessionNote,
 	supportsNativeWebSearch,
+	WEB_SEARCH_SESSION_NOTE_TEXT,
+	WEB_SEARCH_SESSION_NOTE_TYPE,
 } from "./tools/web-search-tool.ts";
 import { registerWriteStdinTool } from "./tools/write-stdin-tool.ts";
 
@@ -21,7 +22,7 @@ interface AdapterState {
 	enabled: boolean;
 	previousToolNames?: string[];
 	promptSkills: PromptSkill[];
-	pendingWebSearchCount: number;
+	webSearchNoticeShown: boolean;
 }
 
 const ADAPTER_TOOL_NAMES = [...CORE_ADAPTER_TOOL_NAMES, VIEW_IMAGE_TOOL_NAME, WEB_SEARCH_TOOL_NAME];
@@ -35,20 +36,21 @@ function getCommandArg(args: unknown): string | undefined {
 
 export default function codexConversion(pi: ExtensionAPI) {
 	const tracker = createExecCommandTracker();
-	const state: AdapterState = { enabled: false, promptSkills: [], pendingWebSearchCount: 0 };
+	const state: AdapterState = { enabled: false, promptSkills: [], webSearchNoticeShown: false };
 	const sessions = createExecSessionManager();
 
 	registerApplyPatchTool(pi);
 	registerExecCommandTool(pi, tracker, sessions);
 	registerWriteStdinTool(pi, sessions);
 	registerWebSearchTool(pi);
-	registerWebSearchMessageRenderer(pi);
+	registerWebSearchSessionNoteRenderer(pi);
 
 	sessions.onSessionExit((_sessionId, command) => {
 		tracker.recordCommandFinished(command);
 	});
 
 	pi.on("session_start", async (_event, ctx) => {
+		state.webSearchNoticeShown = false;
 		syncAdapter(pi, ctx, state);
 	});
 
@@ -84,39 +86,19 @@ export default function codexConversion(pi: ExtensionAPI) {
 		};
 	});
 
-	pi.on("context", async (event) => {
-		return {
-			messages: event.messages.filter(
-				(message) => !(message.role === "custom" && message.customType === WEB_SEARCH_ACTIVITY_MESSAGE_TYPE),
-			),
-		};
-	});
-
-	pi.on("turn_start", async () => {
-		state.pendingWebSearchCount = 0;
-	});
-
 	pi.on("before_provider_request", async (event, ctx) => {
 		if (!isOpenAICodexContext(ctx)) {
 			return undefined;
 		}
-		if (payloadContainsWebSearchTool(event.payload)) {
-			state.pendingWebSearchCount += 1;
-		}
 		return rewriteNativeWebSearchTool(event.payload, ctx.model);
 	});
 
-	pi.on("agent_end", async () => {
-		if (state.pendingWebSearchCount <= 0) {
-			return;
-		}
-		pi.sendMessage({
-			customType: WEB_SEARCH_ACTIVITY_MESSAGE_TYPE,
-			content: "",
-			display: true,
-			details: { count: state.pendingWebSearchCount },
-		});
-		state.pendingWebSearchCount = 0;
+	pi.on("context", async (event) => {
+		return {
+			messages: event.messages.filter(
+				(message) => !(message.role === "custom" && message.customType === WEB_SEARCH_SESSION_NOTE_TYPE),
+			),
+		};
 	});
 }
 
@@ -124,6 +106,7 @@ function syncAdapter(pi: ExtensionAPI, ctx: ExtensionContext, state: AdapterStat
 	state.promptSkills = extractPiPromptSkills(ctx.getSystemPrompt());
 
 	registerViewImageTool(pi, { allowOriginalDetail: supportsOriginalImageDetail(ctx.model) });
+	maybeShowWebSearchSessionNote(pi, ctx, state);
 
 	if (isCodexLikeContext(ctx)) {
 		enableAdapter(pi, ctx, state);
@@ -189,4 +172,16 @@ export function restoreTools(previousTools: string[], activeTools: string[]): st
 
 function hasAdapterTools(activeTools: string[]): boolean {
 	return activeTools.some((toolName) => ADAPTER_TOOL_NAMES.includes(toolName));
+}
+
+function maybeShowWebSearchSessionNote(pi: ExtensionAPI, ctx: ExtensionContext, state: AdapterState): void {
+	if (!shouldShowWebSearchSessionNote(ctx.model, ctx.hasUI, state.webSearchNoticeShown)) {
+		return;
+	}
+	pi.sendMessage({
+		customType: WEB_SEARCH_SESSION_NOTE_TYPE,
+		content: WEB_SEARCH_SESSION_NOTE_TEXT,
+		display: true,
+	});
+	state.webSearchNoticeShown = true;
 }

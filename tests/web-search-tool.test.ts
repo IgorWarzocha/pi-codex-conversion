@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { payloadContainsWebSearchTool, rewriteNativeWebSearchTool, supportsNativeWebSearch } from "../src/tools/web-search-tool.ts";
+import { rewriteNativeWebSearchTool, shouldShowWebSearchSessionNote, supportsNativeWebSearch } from "../src/tools/web-search-tool.ts";
 
 test("supportsNativeWebSearch only enables the tool for openai-codex", () => {
 	assert.equal(supportsNativeWebSearch({ provider: "openai-codex", api: "openai-codex-responses", id: "gpt-5.4" } as never), true);
@@ -41,8 +41,37 @@ test("rewriteNativeWebSearchTool leaves other providers untouched", () => {
 	);
 });
 
-test("payloadContainsWebSearchTool detects both adapter and rewritten native tools", () => {
-	assert.equal(payloadContainsWebSearchTool({ tools: [{ type: "function", name: "web_search", parameters: { type: "object" } }] }), true);
-	assert.equal(payloadContainsWebSearchTool({ tools: [{ type: "web_search", external_web_access: true }] }), true);
-	assert.equal(payloadContainsWebSearchTool({ tools: [{ type: "function", name: "exec_command", parameters: { type: "object" } }] }), false);
+test("shouldShowWebSearchSessionNote is gated to UI-backed openai-codex sessions and only shows once", () => {
+	assert.equal(
+		shouldShowWebSearchSessionNote(
+			{ provider: "openai-codex", api: "openai-codex-responses", id: "gpt-5.4" } as never,
+			true,
+			false,
+		),
+		true,
+	);
+	assert.equal(
+		shouldShowWebSearchSessionNote(
+			{ provider: "openai-codex", api: "openai-codex-responses", id: "gpt-5.4" } as never,
+			false,
+			false,
+		),
+		false,
+	);
+	assert.equal(
+		shouldShowWebSearchSessionNote(
+			{ provider: "github-copilot", api: "chat-completions", id: "gpt-5.4" } as never,
+			true,
+			false,
+		),
+		false,
+	);
+	assert.equal(
+		shouldShowWebSearchSessionNote(
+			{ provider: "openai-codex", api: "openai-codex-responses", id: "gpt-5.4" } as never,
+			true,
+			true,
+		),
+		false,
+	);
 });
