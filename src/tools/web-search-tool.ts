@@ -9,8 +9,12 @@ const WEB_SEARCH_LOCAL_EXECUTION_MESSAGE =
 export const WEB_SEARCH_SESSION_NOTE_TYPE = "codex-web-search-session-note";
 export const WEB_SEARCH_SESSION_NOTE_TEXT =
 	"Native OpenAI Codex web search is enabled for this session. Search runs silently and is not surfaced as a separate tool call.";
+const WEB_SEARCH_MULTIMODAL_CONTENT_TYPES = ["text", "image"] as const;
 
-const WEB_SEARCH_PARAMETERS = Type.Object({}, { additionalProperties: false });
+const WEB_SEARCH_PARAMETERS = Type.Unsafe<Record<string, never>>({
+	type: "object",
+	additionalProperties: false,
+});
 
 interface FunctionToolPayload {
 	type?: unknown;
@@ -20,6 +24,12 @@ interface FunctionToolPayload {
 interface ResponsesPayload {
 	tools?: unknown[];
 	[key: string]: unknown;
+}
+
+interface ResponsesWebSearchTool {
+	type: "web_search";
+	external_web_access: true;
+	search_content_types?: string[];
 }
 
 export function supportsNativeWebSearch(model: ExtensionContext["model"]): boolean {
@@ -32,6 +42,14 @@ export function shouldShowWebSearchSessionNote(
 	alreadyShown: boolean,
 ): boolean {
 	return hasUI && !alreadyShown && supportsNativeWebSearch(model);
+}
+
+export function supportsMultimodalNativeWebSearch(model: ExtensionContext["model"]): boolean {
+	if (!supportsNativeWebSearch(model)) {
+		return false;
+	}
+	const id = (model?.id ?? "").toLowerCase();
+	return !id.includes("spark");
 }
 
 function isWebSearchFunctionTool(tool: unknown): tool is FunctionToolPayload {
@@ -55,10 +73,14 @@ export function rewriteNativeWebSearchTool(payload: unknown, model: ExtensionCon
 		}
 		rewritten = true;
 		// Match Codex's native tool shape rather than exposing a synthetic function tool.
-		return {
+		const nativeTool: ResponsesWebSearchTool = {
 			type: "web_search",
 			external_web_access: true,
 		};
+		if (supportsMultimodalNativeWebSearch(model)) {
+			nativeTool.search_content_types = [...WEB_SEARCH_MULTIMODAL_CONTENT_TYPES];
+		}
+		return nativeTool;
 	});
 
 	if (!rewritten) {
@@ -75,8 +97,10 @@ export function createWebSearchTool(): ToolDefinition<typeof WEB_SEARCH_PARAMETE
 	return {
 		name: "web_search",
 		label: "web_search",
-		description: "Search the internet for sources related to the prompt.",
-		promptSnippet: "Search the internet for sources related to the prompt.",
+		description:
+			"Search the web for sources relevant to the current task. Use it when you need up-to-date information, external references, or broader context beyond the workspace.",
+		promptSnippet:
+			"Search the web for sources relevant to the current task. Use it when you need up-to-date information, external references, or broader context beyond the workspace.",
 		parameters: WEB_SEARCH_PARAMETERS,
 		async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
 			if (!supportsNativeWebSearch(ctx.model)) {

@@ -38,7 +38,10 @@ Current working directory: /tmp/example-workspace`;
 test("buildCodexSystemPrompt preserves Pi-composed sections and adds a narrow Codex delta", () => {
 	const prompt = buildCodexSystemPrompt(PI_BASE_PROMPT, { shell: "/bin/fish" });
 
-	assert.match(prompt, /^You are Codex running inside pi, a coding agent harness\./);
+	assert.match(
+		prompt,
+		/^You are an expert coding assistant operating inside pi, a coding agent harness\. You help users by reading files, executing commands, editing code, and writing new files\./,
+	);
 	assert.match(prompt, /^Available tools:\n- exec_command: Run a command\./m);
 	assert.match(prompt, /^Pi documentation \(read only when the user asks about pi itself, its SDK, extensions, themes, skills, or TUI\):$/m);
 	assert.match(prompt, /^# Project Context$/m);

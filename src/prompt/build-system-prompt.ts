@@ -4,23 +4,11 @@ export interface PromptSkill {
 	filePath: string;
 }
 
-const PI_INTRO =
-	"You are an expert coding assistant operating inside pi, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.";
-const CODEX_INTRO =
-	"You are Codex running inside pi, a coding agent harness. Work directly in the user's workspace and finish the task end-to-end when feasible.";
-
 const CODEX_GUIDELINES = [
 	"Use `parallel` only when tool calls are independent and can safely run at the same time.",
 	"Use `write_stdin` when an exec session returns `session_id`, and continue until `exit_code` is present.",
 	"Do not request `tty` unless interactive terminal behavior is required.",
 ];
-
-function rewriteIntro(prompt: string): string {
-	if (!prompt.startsWith(PI_INTRO)) {
-		return prompt;
-	}
-	return `${CODEX_INTRO}${prompt.slice(PI_INTRO.length)}`;
-}
 
 function insertBeforeTrailingContext(prompt: string, section: string): string {
 	const currentDateIndex = prompt.lastIndexOf("\nCurrent date:");
@@ -114,5 +102,5 @@ function injectGuidelines(prompt: string): string {
 }
 
 export function buildCodexSystemPrompt(basePrompt: string, options: { skills?: PromptSkill[]; shell?: string } = {}): string {
-	return injectShell(injectSkills(injectGuidelines(rewriteIntro(basePrompt)), options.skills ?? []), options.shell);
+	return injectShell(injectSkills(injectGuidelines(basePrompt), options.skills ?? []), options.shell);
 }
