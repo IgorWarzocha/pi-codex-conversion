@@ -1,5 +1,5 @@
 import { isSmallFormattingCommand, parseShellPart, nextCwd } from "./parse.ts";
-import { splitOnConnectors, normalizeTokens, shellSplit } from "./tokenize.ts";
+import { joinCommandTokens, splitOnConnectors, normalizeTokens, shellSplit } from "./tokenize.ts";
 import type { CommandSummary, ShellAction } from "./types.ts";
 
 export type { CommandSummary, ShellAction } from "./types.ts";
@@ -8,9 +8,10 @@ export type { CommandSummary, ShellAction } from "./types.ts";
 // repository exploration. The moment we see an actual side-effectful run, we
 // fall back to raw command rendering so the UI does not hide meaningful work.
 export function summarizeShellCommand(command: string): CommandSummary {
-	const normalized = normalizeTokens(shellSplit(command));
+	const rawTokens = shellSplit(command);
+	const normalized = normalizeTokens(rawTokens);
 	const parts = splitOnConnectors(normalized);
-	const fallback = runSummary(command);
+	const fallback = runSummary(command, rawTokens, normalized);
 
 	const effectiveParts = parts.length > 1 ? parts.filter((part) => !isSmallFormattingCommand(part)) : parts;
 
@@ -44,11 +45,42 @@ export function summarizeShellCommand(command: string): CommandSummary {
 	};
 }
 
-function runSummary(command: string): CommandSummary {
+function runSummary(command: string, rawTokens: string[], normalizedTokens: string[]): CommandSummary {
+	const display = extractWrappedShellScript(rawTokens) ?? extractPowerShellScript(rawTokens) ?? formatCommand(normalizedTokens) ?? (command.trim() || command);
 	return {
 		maskAsExplored: false,
-		actions: [{ kind: "run", command: command.trim() || command }],
+		actions: [{ kind: "run", command: display }],
 	};
+}
+
+function formatCommand(tokens: string[]): string | undefined {
+	return tokens.length > 0 ? joinCommandTokens(tokens) : undefined;
+}
+
+function extractPowerShellScript(tokens: string[]): string | undefined {
+	if (tokens.length < 3) return undefined;
+	const shell = tokens[0]?.replace(/\\/g, "/").split("/").pop()?.toLowerCase();
+	if (shell !== "powershell" && shell !== "powershell.exe" && shell !== "pwsh" && shell !== "pwsh.exe") {
+		return undefined;
+	}
+	for (let index = 1; index + 1 < tokens.length; index++) {
+		const flag = tokens[index]?.toLowerCase();
+		if (flag !== "-nologo" && flag !== "-noprofile" && flag !== "-command" && flag !== "-c") {
+			return undefined;
+		}
+		if (flag === "-command" || flag === "-c") {
+			return tokens[index + 1];
+		}
+	}
+	return undefined;
+}
+
+function extractWrappedShellScript(tokens: string[]): string | undefined {
+	if (tokens.length !== 3) return undefined;
+	const shell = tokens[0]?.replace(/\\/g, "/").split("/").pop()?.toLowerCase();
+	if (shell !== "bash" && shell !== "zsh" && shell !== "sh") return undefined;
+	if (tokens[1] !== "-c" && tokens[1] !== "-lc") return undefined;
+	return tokens[2];
 }
 
 function dedupeActions(actions: ShellAction[]): ShellAction[] {

@@ -23,9 +23,19 @@ export function shellSplit(input: string): string[] {
 			continue;
 		}
 
-		if (char === "\\" && quote !== "'") {
-			escaping = true;
-			continue;
+		if (char === "\\") {
+			if (!quote) {
+				escaping = true;
+				continue;
+			}
+			if (quote === '"') {
+				if (next && (next === "\\" || next === '"' || next === "$" || next === "`")) {
+					escaping = true;
+					continue;
+				}
+				current += char;
+				continue;
+			}
 		}
 
 		if (quote) {
@@ -72,6 +82,18 @@ export function shellSplit(input: string): string[] {
 	return tokens;
 }
 
+export function shellQuote(token: string): string {
+	if (token.length === 0) return "''";
+	if (/^[A-Za-z0-9_@%+=:,./-]+$/.test(token)) return token;
+	return `'${token.replace(/'/g, `'"'"'`)}'`;
+}
+
+export function joinCommandTokens(tokens: string[]): string {
+	return tokens
+		.map((token) => (token === "&&" || token === "||" || token === "|" || token === ";" ? token : shellQuote(token)))
+		.join(" ");
+}
+
 export function normalizeTokens(tokens: string[]): string[] {
 	if (tokens.length >= 3 && (tokens[0] === "yes" || tokens[0] === "y" || tokens[0] === "no" || tokens[0] === "n") && tokens[1] === "|") {
 		return normalizeTokens(tokens.slice(2));
@@ -110,7 +132,7 @@ export function shortDisplayPath(path: string): string {
 	const normalized = path.replace(/\\/g, "/").replace(/\/$/, "");
 	const parts = normalized
 		.split("/")
-		.filter((part) => part.length > 0 && part !== "." && part !== "src" && part !== "dist" && part !== "build" && part !== "node_modules");
+		.filter((part) => part.length > 0 && part !== "src" && part !== "dist" && part !== "build" && part !== "node_modules");
 	return parts[parts.length - 1] ?? normalized;
 }
 

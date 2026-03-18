@@ -1,5 +1,5 @@
 import type { ShellAction } from "./types.ts";
-import { isAbsoluteLike, joinPaths, shortDisplayPath } from "./tokenize.ts";
+import { isAbsoluteLike, joinCommandTokens, joinPaths, shortDisplayPath } from "./tokenize.ts";
 
 export function parseShellPart(tokens: string[], cwd?: string): ShellAction | null {
 	if (tokens.length === 0) return null;
@@ -16,6 +16,12 @@ export function parseShellPart(tokens: string[], cwd?: string): ShellAction | nu
 		return {
 			...parsed,
 			path: joinPaths(cwd, parsed.path),
+		};
+	}
+	if (parsed.kind === "list" && cwd && !parsed.path) {
+		return {
+			...parsed,
+			path: shortDisplayPath(cwd),
 		};
 	}
 
@@ -54,13 +60,13 @@ export function isSmallFormattingCommand(tokens: string[]): boolean {
 	if (head === "head") {
 		if (tail.length === 0) return true;
 		if (tail.length === 1) return tail[0].startsWith("-");
-		if ((tail[0] === "-n" || tail[0] === "-c") && /^\d+$/.test(tail[1])) return true;
+		if (tail.length === 2 && (tail[0] === "-n" || tail[0] === "-c") && /^\d+$/.test(tail[1])) return true;
 		return false;
 	}
 	if (head === "tail") {
 		if (tail.length === 0) return true;
 		if (tail.length === 1) return tail[0].startsWith("-");
-		if (tail[0] === "-n" || tail[0] === "-c") {
+		if (tail.length === 2 && (tail[0] === "-n" || tail[0] === "-c")) {
 			const value = tail[1]?.startsWith("+") ? tail[1].slice(1) : tail[1];
 			if (value && /^\d+$/.test(value)) return true;
 		}
@@ -75,6 +81,7 @@ export function isSmallFormattingCommand(tokens: string[]): boolean {
 function parseMainTokens(tokens: string[]): ShellAction | null {
 	const [head, ...tail] = tokens;
 	if (!head) return null;
+	const command = joinCommandTokens(tokens);
 
 	if (
 		head === "echo" ||
@@ -93,7 +100,7 @@ function parseMainTokens(tokens: string[]): ShellAction | null {
 	}
 
 	if (head === "xargs") {
-		return xargsIsMutatingSubcommand(tail) ? { kind: "run", command: tokens.join(" ") } : null;
+		return xargsIsMutatingSubcommand(tail) ? { kind: "run", command } : null;
 	}
 
 	if (head === "ls" || head === "eza" || head === "exa") {
@@ -102,17 +109,17 @@ function parseMainTokens(tokens: string[]): ShellAction | null {
 				? ["-I", "-w", "--block-size", "--format", "--time-style", "--color", "--quoting-style"]
 				: ["-I", "--ignore-glob", "--color", "--sort", "--time-style", "--time"];
 		const path = firstNonFlagOperand(tail, flagsWithValues);
-		return { kind: "list", command: tokens.join(" "), path: path ? shortDisplayPath(path) : undefined };
+		return { kind: "list", command, path: path ? shortDisplayPath(path) : undefined };
 	}
 
 	if (head === "tree") {
 		const path = firstNonFlagOperand(tail, ["-L", "-P", "-I", "--charset", "--filelimit", "--sort"]);
-		return { kind: "list", command: tokens.join(" "), path: path ? shortDisplayPath(path) : undefined };
+		return { kind: "list", command, path: path ? shortDisplayPath(path) : undefined };
 	}
 
 	if (head === "du") {
 		const path = firstNonFlagOperand(tail, ["-d", "--max-depth", "-B", "--block-size", "--exclude", "--time-style"]);
-		return { kind: "list", command: tokens.join(" "), path: path ? shortDisplayPath(path) : undefined };
+		return { kind: "list", command, path: path ? shortDisplayPath(path) : undefined };
 	}
 
 	if (head === "rg" || head === "rga" || head === "ripgrep-all") {
@@ -137,43 +144,43 @@ function parseMainTokens(tokens: string[]): ShellAction | null {
 		const nonFlags = candidates.filter((token) => !token.startsWith("-"));
 		if (hasFilesFlag) {
 			const path = nonFlags[0];
-			return { kind: "list", command: tokens.join(" "), path: path ? shortDisplayPath(path) : undefined };
+			return { kind: "list", command, path: path ? shortDisplayPath(path) : undefined };
 		}
 		return {
 			kind: "search",
-			command: tokens.join(" "),
+			command,
 			query: nonFlags[0],
 			path: nonFlags[1] ? shortDisplayPath(nonFlags[1]) : undefined,
 		};
 	}
 
 	if (head === "git" && tail[0] === "grep") {
-		return parseGrepLike(tokens.join(" "), tail.slice(1));
+		return parseGrepLike(command, tail.slice(1));
 	}
 
 	if (head === "git" && tail[0] === "ls-files") {
 		const path = firstNonFlagOperand(tail.slice(1), ["--exclude", "--exclude-from", "--pathspec-from-file"]);
-		return { kind: "list", command: tokens.join(" "), path: path ? shortDisplayPath(path) : undefined };
+		return { kind: "list", command, path: path ? shortDisplayPath(path) : undefined };
 	}
 
 	if (head === "fd") {
 		const [query, path] = parseFdQueryAndPath(tail);
 		if (query) {
-			return { kind: "search", command: tokens.join(" "), query, path };
+			return { kind: "search", command, query, path };
 		}
-		return { kind: "list", command: tokens.join(" "), path };
+		return { kind: "list", command, path };
 	}
 
 	if (head === "find") {
 		const [query, path] = parseFindQueryAndPath(tail);
 		if (query) {
-			return { kind: "search", command: tokens.join(" "), query, path };
+			return { kind: "search", command, query, path };
 		}
-		return { kind: "list", command: tokens.join(" "), path };
+		return { kind: "list", command, path };
 	}
 
 	if (head === "grep" || head === "egrep" || head === "fgrep") {
-		return parseGrepLike(tokens.join(" "), tail);
+		return parseGrepLike(command, tail);
 	}
 
 	if (head === "ag" || head === "ack" || head === "pt") {
@@ -182,7 +189,7 @@ function parseMainTokens(tokens: string[]): ShellAction | null {
 		const nonFlags = candidates.filter((token) => !token.startsWith("-"));
 		return {
 			kind: "search",
-			command: tokens.join(" "),
+			command,
 			query: nonFlags[0],
 			path: nonFlags[1] ? shortDisplayPath(nonFlags[1]) : undefined,
 		};
@@ -190,7 +197,7 @@ function parseMainTokens(tokens: string[]): ShellAction | null {
 
 	if (head === "cat") {
 		const path = singleNonFlagOperand(tail, []);
-		return path ? readAction(tokens.join(" "), path) : { kind: "run", command: tokens.join(" ") };
+		return path ? readAction(command, path) : { kind: "run", command };
 	}
 
 	if (head === "bat" || head === "batcat") {
@@ -203,7 +210,7 @@ function parseMainTokens(tokens: string[]): ShellAction | null {
 			"--line-range",
 			"--map-syntax",
 		]);
-		return path ? readAction(tokens.join(" "), path) : { kind: "run", command: tokens.join(" ") };
+		return path ? readAction(command, path) : { kind: "run", command };
 	}
 
 	if (head === "less") {
@@ -220,45 +227,45 @@ function parseMainTokens(tokens: string[]): ShellAction | null {
 			"--shift",
 			"--jump-target",
 		]);
-		return path ? readAction(tokens.join(" "), path) : { kind: "run", command: tokens.join(" ") };
+		return path ? readAction(command, path) : { kind: "run", command };
 	}
 
 	if (head === "more") {
 		const path = singleNonFlagOperand(tail, []);
-		return path ? readAction(tokens.join(" "), path) : { kind: "run", command: tokens.join(" ") };
+		return path ? readAction(command, path) : { kind: "run", command };
 	}
 
 	if (head === "head") {
 		const path = readPathFromHeadTail(tail, "head");
-		return path ? readAction(tokens.join(" "), path) : null;
+		return path ? readAction(command, path) : null;
 	}
 
 	if (head === "tail") {
 		const path = readPathFromHeadTail(tail, "tail");
-		return path ? readAction(tokens.join(" "), path) : null;
+		return path ? readAction(command, path) : null;
 	}
 
 	if (head === "awk") {
 		const path = awkDataFileOperand(tail);
-		return path ? readAction(tokens.join(" "), path) : { kind: "run", command: tokens.join(" ") };
+		return path ? readAction(command, path) : { kind: "run", command };
 	}
 
 	if (head === "nl") {
 		const candidates = skipFlagValues(tail, ["-s", "-w", "-v", "-i", "-b"]);
 		const path = candidates.find((token) => !token.startsWith("-"));
-		return path ? readAction(tokens.join(" "), path) : null;
+		return path ? readAction(command, path) : null;
 	}
 
 	if (head === "sed") {
 		const path = sedReadPath(tail);
-		return path ? readAction(tokens.join(" "), path) : null;
+		return path ? readAction(command, path) : null;
 	}
 
 	if (isPythonCommand(head)) {
-		return pythonWalksFiles(tail) ? { kind: "list", command: tokens.join(" ") } : { kind: "run", command: tokens.join(" ") };
+		return pythonWalksFiles(tail) ? { kind: "list", command } : { kind: "run", command };
 	}
 
-	return { kind: "run", command: tokens.join(" ") };
+	return { kind: "run", command };
 }
 
 function parseGrepLike(command: string, tail: string[]): ShellAction {
