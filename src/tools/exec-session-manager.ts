@@ -65,7 +65,7 @@ export interface ExecSessionManager {
 }
 
 const DEFAULT_EXEC_YIELD_TIME_MS = 10_000;
-const DEFAULT_WRITE_YIELD_TIME_MS = 250;
+const DEFAULT_WRITE_YIELD_TIME_MS = 10_000;
 const DEFAULT_MAX_OUTPUT_TOKENS = 10_000;
 const MIN_YIELD_TIME_MS = 250;
 const MAX_YIELD_TIME_MS = 30_000;
@@ -292,18 +292,24 @@ export function createExecSessionManager(): ExecSessionManager {
 		notify(session);
 	}
 
-	function waitForActivity(session: ExecSession, yieldTimeMs: number): Promise<number> {
-		if (session.buffer !== session.emittedBuffer || session.exitCode !== undefined && session.exitCode !== null) {
+	function waitForExitOrTimeout(session: ExecSession, yieldTimeMs: number): Promise<number> {
+		if (session.exitCode !== undefined && session.exitCode !== null) {
 			return Promise.resolve(0);
 		}
 
 		const startedAt = Date.now();
 		return new Promise((resolvePromise) => {
 			const onWake = () => {
+				if (session.exitCode === undefined || session.exitCode === null) {
+					return;
+				}
 				cleanup();
 				resolvePromise(Date.now() - startedAt);
 			};
-			const timeout = setTimeout(onWake, yieldTimeMs);
+			const timeout = setTimeout(() => {
+				cleanup();
+				resolvePromise(Date.now() - startedAt);
+			}, yieldTimeMs);
 			const cleanup = () => {
 				clearTimeout(timeout);
 				session.listeners.delete(onWake);
@@ -432,7 +438,7 @@ export function createExecSessionManager(): ExecSessionManager {
 			sessions.set(session.id, session);
 			rememberCommand(session.id, session.command);
 
-			const waitedMs = await waitForActivity(session, clampYieldTime(input.yield_time_ms, DEFAULT_EXEC_YIELD_TIME_MS));
+			const waitedMs = await waitForExitOrTimeout(session, clampYieldTime(input.yield_time_ms, DEFAULT_EXEC_YIELD_TIME_MS));
 			return makeResult(session, waitedMs, input.max_output_tokens);
 		},
 		write: async (input) => {
@@ -450,7 +456,7 @@ export function createExecSessionManager(): ExecSessionManager {
 			}
 			const waitedMs =
 				session.exitCode === undefined
-					? await waitForActivity(session, clampYieldTime(input.yield_time_ms, DEFAULT_WRITE_YIELD_TIME_MS))
+					? await waitForExitOrTimeout(session, clampYieldTime(input.yield_time_ms, DEFAULT_WRITE_YIELD_TIME_MS))
 					: 0;
 			return makeResult(session, waitedMs, input.max_output_tokens);
 		},

@@ -8,20 +8,17 @@ export function normalizePatchPath({ path }: { path: string }): string {
 	return withoutAt.replace(/^['"]|['"]$/g, "");
 }
 
-// Patch paths are intentionally confined to ctx.cwd so the adapter cannot write
-// outside the active workspace even if the incoming patch text is malicious.
+// Relative patch paths stay anchored to ctx.cwd. Absolute patch paths are
+// accepted as-is so the adapter can match Codex-style path usage.
 export function resolvePatchPath({ cwd, patchPath }: { cwd: string; patchPath: string }): string {
 	const normalized = normalizePatchPath({ path: patchPath });
 	if (!normalized) {
 		throw new DiffError("Patch path cannot be empty");
 	}
-	if (isAbsolute(normalized)) {
-		throw new DiffError("We do not support absolute paths.");
-	}
 
-	const absolutePath = resolve(cwd, normalized);
+	const absolutePath = isAbsolute(normalized) ? normalized : resolve(cwd, normalized);
 	const rel = relative(cwd, absolutePath);
-	if (rel.startsWith("..") || isAbsolute(rel)) {
+	if (!isAbsolute(normalized) && (rel.startsWith("..") || isAbsolute(rel))) {
 		throw new DiffError(`Path escapes working directory: ${normalized}`);
 	}
 	return absolutePath;

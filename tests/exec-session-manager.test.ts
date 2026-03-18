@@ -49,6 +49,57 @@ test("exec session manager supports long-running commands via write_stdin", asyn
 	}
 });
 
+test("exec_command returns completed for short-lived commands that print before exiting", async () => {
+	const sessions = createExecSessionManager();
+	try {
+		const result = await sessions.exec(
+			{
+				cmd: "printf ready && sleep 0.05 && printf done",
+				shell: "/bin/bash",
+				login: false,
+				yield_time_ms: 500,
+			},
+			process.cwd(),
+		);
+
+		assert.equal(result.output, "readydone");
+		assert.equal(result.exit_code, 0);
+		assert.equal(result.session_id, undefined);
+	} finally {
+		sessions.shutdown();
+	}
+});
+
+test("write_stdin returns completed when interactive input causes a quick exit", async () => {
+	const sessions = createExecSessionManager();
+	try {
+		const started = await sessions.exec(
+			{
+				cmd: "read line && printf ':%s' \"$line\"",
+				shell: "/bin/bash",
+				login: false,
+				tty: true,
+				yield_time_ms: 50,
+			},
+			process.cwd(),
+		);
+
+		assert.equal(typeof started.session_id, "number");
+
+		const resumed = await sessions.write({
+			session_id: started.session_id!,
+			chars: "hello\n",
+			yield_time_ms: 500,
+		});
+
+		assert.equal(resumed.output, "hello\n:hello");
+		assert.equal(resumed.exit_code, 0);
+		assert.equal(resumed.session_id, undefined);
+	} finally {
+		sessions.shutdown();
+	}
+});
+
 test("write_stdin rejects interactive input for non-tty sessions", async () => {
 	const sessions = createExecSessionManager();
 	try {

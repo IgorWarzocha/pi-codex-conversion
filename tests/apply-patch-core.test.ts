@@ -54,6 +54,26 @@ test("executePatch rejects paths that escape cwd", async () => {
 	}
 });
 
+test("executePatch allows absolute paths", async () => {
+	const cwd = mkdtempSync(join(tmpdir(), "pi-codex-conversion-"));
+	const absolutePath = join(cwd, "absolute.txt");
+	try {
+		const result = executePatch({
+			cwd,
+			patchText: `*** Begin Patch
+*** Add File: ${absolutePath}
++hello absolute
+*** End Patch`,
+		});
+
+		assert.deepEqual(result.changedFiles, [absolutePath]);
+		assert.deepEqual(result.createdFiles, [absolutePath]);
+		assert.equal(readFileSync(absolutePath, "utf8"), "hello absolute\n");
+	} finally {
+		await rm(cwd, { recursive: true, force: true });
+	}
+});
+
 test("executePatch rejects empty patches", async () => {
 	const cwd = mkdtempSync(join(tmpdir(), "pi-codex-conversion-"));
 	try {
