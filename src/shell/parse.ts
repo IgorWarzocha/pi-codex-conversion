@@ -29,6 +29,49 @@ export function nextCwd(currentCwd: string | undefined, tokens: string[]): strin
 	return currentCwd ? joinPaths(currentCwd, target) : target;
 }
 
+export function isSmallFormattingCommand(tokens: string[]): boolean {
+	if (tokens.length === 0) return false;
+	const [head, ...tail] = tokens;
+	if (
+		head === "wc" ||
+		head === "tr" ||
+		head === "cut" ||
+		head === "sort" ||
+		head === "uniq" ||
+		head === "tee" ||
+		head === "column" ||
+		head === "yes" ||
+		head === "printf"
+	) {
+		return true;
+	}
+	if (head === "xargs") {
+		return !xargsIsMutatingSubcommand(tail);
+	}
+	if (head === "awk") {
+		return awkDataFileOperand(tail) === undefined;
+	}
+	if (head === "head") {
+		if (tail.length === 0) return true;
+		if (tail.length === 1) return tail[0].startsWith("-");
+		if ((tail[0] === "-n" || tail[0] === "-c") && /^\d+$/.test(tail[1])) return true;
+		return false;
+	}
+	if (head === "tail") {
+		if (tail.length === 0) return true;
+		if (tail.length === 1) return tail[0].startsWith("-");
+		if (tail[0] === "-n" || tail[0] === "-c") {
+			const value = tail[1]?.startsWith("+") ? tail[1].slice(1) : tail[1];
+			if (value && /^\d+$/.test(value)) return true;
+		}
+		return false;
+	}
+	if (head === "sed") {
+		return sedReadPath(tail) === undefined;
+	}
+	return false;
+}
+
 function parseMainTokens(tokens: string[]): ShellAction | null {
 	const [head, ...tail] = tokens;
 	if (!head) return null;

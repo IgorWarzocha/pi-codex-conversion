@@ -1,4 +1,4 @@
-import { parseShellPart, nextCwd } from "./parse.ts";
+import { isSmallFormattingCommand, parseShellPart, nextCwd } from "./parse.ts";
 import { splitOnConnectors, normalizeTokens, shellSplit } from "./tokenize.ts";
 import type { CommandSummary, ShellAction } from "./types.ts";
 
@@ -12,14 +12,16 @@ export function summarizeShellCommand(command: string): CommandSummary {
 	const parts = splitOnConnectors(normalized);
 	const fallback = runSummary(command);
 
-	if (parts.length === 0) {
+	const effectiveParts = parts.length > 1 ? parts.filter((part) => !isSmallFormattingCommand(part)) : parts;
+
+	if (effectiveParts.length === 0) {
 		return fallback;
 	}
 
 	const actions: ShellAction[] = [];
 	let cwd: string | undefined;
 
-	for (const part of parts) {
+	for (const part of effectiveParts) {
 		if (part.length === 0) continue;
 
 		cwd = nextCwd(cwd, part);

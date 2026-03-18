@@ -101,6 +101,12 @@ test("keeps mutating xargs pipelines as raw runs", () => {
 	assert.deepEqual(summary.actions, [{ kind: "run", command: "rg -l foo src | xargs perl -pi -e 's/foo/bar/g'" }]);
 });
 
+test("drops awk formatting helpers in pipelines", () => {
+	const summary = summarizeShellCommand("rg --files | awk '{print $1}'");
+	assert.equal(summary.maskAsExplored, true);
+	assert.deepEqual(summary.actions, [{ kind: "list", command: "rg --files", path: undefined }]);
+});
+
 test("classifies ripgrep searches separately from command runs", () => {
 	const search = summarizeShellCommand("rg -n adapter pi-codex-conversion");
 	assert.equal(search.maskAsExplored, true);
