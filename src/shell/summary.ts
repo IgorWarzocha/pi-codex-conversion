@@ -1,3 +1,4 @@
+import { extractBashCommand, hasBashAstSupport, parseShellLcPlainCommands } from "./bash.ts";
 import { isSmallFormattingCommand, parseShellPart, nextCwd } from "./parse.ts";
 import { joinCommandTokens, splitOnConnectors, normalizeTokens, shellSplit } from "./tokenize.ts";
 import type { CommandSummary, ShellAction } from "./types.ts";
@@ -10,8 +11,15 @@ export type { CommandSummary, ShellAction } from "./types.ts";
 export function summarizeShellCommand(command: string): CommandSummary {
 	const rawTokens = shellSplit(command);
 	const normalized = normalizeTokens(rawTokens);
-	const parts = splitOnConnectors(normalized);
 	const fallback = runSummary(command, rawTokens, normalized);
+	const bashCommand = extractBashCommand(rawTokens);
+	const parts = bashCommand
+		? parseShellLcPlainCommands(rawTokens) ?? (hasBashAstSupport() ? undefined : splitOnConnectors(normalized))
+		: splitOnConnectors(normalized);
+
+	if (!parts) {
+		return fallback;
+	}
 
 	const effectiveParts = parts.length > 1 ? parts.filter((part) => !isSmallFormattingCommand(part)) : parts;
 

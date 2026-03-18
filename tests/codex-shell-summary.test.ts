@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { hasBashAstSupport, parseShellLcPlainCommands } from "../src/shell/bash.ts";
 import { summarizeShellCommand } from "../src/shell/summary.ts";
 import { isSmallFormattingCommand } from "../src/shell/parse.ts";
 
@@ -279,4 +280,27 @@ test("covers remaining upstream parser edge cases", () => {
 	assert.deepEqual(summarizeShellCommand(`bash -lc 'tail -n+10 README.md'`).actions, [{ kind: "read", command: "tail -n+10 README.md", name: "README.md", path: "README.md" }]);
 	assert.deepEqual(summarizeShellCommand(`pwsh -NoProfile -c 'Write-Host hi'`).actions, [{ kind: "run", command: "Write-Host hi" }]);
 	assert.equal(isSmallFormattingCommand([]), false);
+});
+
+test("ports bash tree-sitter plain-command parsing", () => {
+	assert.equal(hasBashAstSupport(), true);
+	assert.deepEqual(parseShellLcPlainCommands(["bash", "-lc", "ls && pwd; echo 'hi there' | wc -l"]), [
+		["ls"],
+		["pwd"],
+		["echo", "hi there"],
+		["wc", "-l"],
+	]);
+	assert.deepEqual(parseShellLcPlainCommands(["bash", "-lc", `echo "/usr"'/'"local"/bin`]), [["echo", "/usr/local/bin"]]);
+	assert.deepEqual(parseShellLcPlainCommands(["bash", "-lc", `rg -n "foo" -g"*.py" src`]), [["rg", "-n", "foo", "-g*.py", "src"]]);
+	assert.equal(parseShellLcPlainCommands(["bash", "-lc", `echo "$HOME"`]), undefined);
+	assert.equal(parseShellLcPlainCommands(["bash", "-lc", "ls > out.txt"]), undefined);
+	assert.equal(parseShellLcPlainCommands(["bash", "-lc", "FOO=bar ls"]), undefined);
+	assert.equal(parseShellLcPlainCommands(["bash", "-lc", "ls || (pwd && echo hi)"]), undefined);
+});
+
+test("uses bash AST rejection to avoid false explored summaries", () => {
+	assert.deepEqual(summarizeShellCommand(`bash -lc 'ls > out.txt'`).actions, [{ kind: "run", command: "ls > out.txt" }]);
+	assert.deepEqual(summarizeShellCommand(`bash -lc 'FOO=bar rg --files'`).actions, [{ kind: "run", command: "FOO=bar rg --files" }]);
+	assert.deepEqual(summarizeShellCommand(`bash -lc 'echo "$HOME" && rg --files'`).actions, [{ kind: "run", command: `echo "$HOME" && rg --files` }]);
+	assert.deepEqual(summarizeShellCommand(`bash -lc 'ls || (pwd && echo hi)'`).actions, [{ kind: "run", command: "ls || (pwd && echo hi)" }]);
 });
