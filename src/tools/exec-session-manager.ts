@@ -3,7 +3,7 @@ import { spawn, type ChildProcessByStdio } from "node:child_process";
 import { resolve } from "node:path";
 import type { Readable } from "node:stream";
 import * as pty from "node-pty";
-import { getCodexRuntimeShell } from "../adapter/runtime-shell.ts";
+import { CODEX_FALLBACK_SHELL, getCodexRuntimeShell, isFishShell } from "../adapter/runtime-shell.ts";
 
 export interface UnifiedExecResult {
 	chunk_id: string;
@@ -79,6 +79,59 @@ function resolveWorkdir(baseCwd: string, workdir?: string): string {
 
 function resolveShell(shell?: string): string {
 	return getCodexRuntimeShell(shell || process.env.SHELL);
+}
+
+const BASH_SYNC_ENV_KEYS = [
+	"PATH",
+	"SHELL",
+	"HOME",
+	"XDG_CONFIG_HOME",
+	"XDG_DATA_HOME",
+	"XDG_CACHE_HOME",
+	"BUN_INSTALL",
+	"PNPM_HOME",
+	"MISE_DATA_DIR",
+	"MISE_CONFIG_DIR",
+	"MISE_SHIMS_DIR",
+	"CARGO_HOME",
+	"GOPATH",
+	"ANDROID_HOME",
+	"ANDROID_NDK_HOME",
+	"JAVA_HOME",
+];
+
+function shellEscape(value: string): string {
+	if (/^[A-Za-z0-9_@%+=:,./-]+$/.test(value)) return value;
+	return `'${value.replace(/'/g, `'"'"'`)}'`;
+}
+
+function shouldSyncBashEnv(requestedShell: string | undefined, effectiveShell: string): boolean {
+	return effectiveShell === CODEX_FALLBACK_SHELL && isFishShell(requestedShell || process.env.SHELL);
+}
+
+function buildSyncedBashCommand(command: string, env: NodeJS.ProcessEnv): string {
+	const assignments: string[] = [];
+	for (const key of BASH_SYNC_ENV_KEYS) {
+		const value = key === "SHELL" ? CODEX_FALLBACK_SHELL : env[key];
+		if (typeof value !== "string") continue;
+		assignments.push(`export ${key}=${shellEscape(value)}`);
+	}
+	if (assignments.length === 0) return command;
+	return `${assignments.join("; ")}; ${command}`;
+}
+
+function resolveExecution(requestedShell: string | undefined, command: string): { shell: string; command: string; env: NodeJS.ProcessEnv } {
+	const shell = resolveShell(requestedShell);
+	const env: NodeJS.ProcessEnv = { ...process.env };
+	if (!shouldSyncBashEnv(requestedShell, shell)) {
+		return { shell, command, env };
+	}
+	env.SHELL = CODEX_FALLBACK_SHELL;
+	return {
+		shell,
+		command: buildSyncedBashCommand(command, env),
+		env,
+	};
 }
 
 function clampYieldTime(yieldTimeMs: number | undefined, fallback: number): number {
@@ -342,11 +395,12 @@ export function createExecSessionManager(): ExecSessionManager {
 
 	function createPipeSession(input: ExecCommandInput, workdir: string, shell: string, signal?: AbortSignal): PipeExecSession {
 		const login = input.login ?? true;
-		const shellArgs = login ? ["-lc", input.cmd] : ["-c", input.cmd];
+		const execution = resolveExecution(input.shell, input.cmd);
+		const shellArgs = login ? ["-lc", execution.command] : ["-c", execution.command];
 		const child = spawn(shell, shellArgs, {
 			cwd: workdir,
 			stdio: ["ignore", "pipe", "pipe"],
-			env: process.env,
+			env: execution.env,
 		});
 
 		const session: PipeExecSession = {
@@ -388,10 +442,11 @@ export function createExecSessionManager(): ExecSessionManager {
 
 	function createPtySession(input: ExecCommandInput, workdir: string, shell: string, signal?: AbortSignal): PtyExecSession {
 		const login = input.login ?? true;
-		const shellArgs = login ? ["-lc", input.cmd] : ["-c", input.cmd];
+		const execution = resolveExecution(input.shell, input.cmd);
+		const shellArgs = login ? ["-lc", execution.command] : ["-c", execution.command];
 		const child = pty.spawn(shell, shellArgs, {
 			cwd: workdir,
-			env: process.env,
+			env: execution.env,
 			name: process.env.TERM || "xterm-256color",
 			cols: 80,
 			rows: 24,

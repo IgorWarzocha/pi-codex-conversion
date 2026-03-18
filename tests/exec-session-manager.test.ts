@@ -116,6 +116,38 @@ test("exec session manager coerces explicit fish shells to bash", async () => {
 	}
 });
 
+test("exec session manager preserves fish-derived PATH and SHELL when forcing bash", async () => {
+	const originalShell = process.env.SHELL;
+	const originalPath = process.env.PATH;
+	process.env.SHELL = "/usr/bin/fish";
+	process.env.PATH = "/tmp/pi-codex-fish-path:/usr/bin:/bin";
+	const sessions = createExecSessionManager();
+	try {
+		const result = await sessions.exec(
+			{
+				cmd: "printf 'PATH=%s\nSHELL=%s' \"$PATH\" \"$SHELL\"",
+				yield_time_ms: 500,
+			},
+			process.cwd(),
+		);
+
+		assert.equal(result.output, "PATH=/tmp/pi-codex-fish-path:/usr/bin:/bin\nSHELL=/bin/bash");
+		assert.equal(result.exit_code, 0);
+	} finally {
+		sessions.shutdown();
+		if (originalShell === undefined) {
+			delete process.env.SHELL;
+		} else {
+			process.env.SHELL = originalShell;
+		}
+		if (originalPath === undefined) {
+			delete process.env.PATH;
+		} else {
+			process.env.PATH = originalPath;
+		}
+	}
+});
+
 test("write_stdin returns completed when interactive input causes a quick exit", async () => {
 	const sessions = createExecSessionManager();
 	try {
