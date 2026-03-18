@@ -41,6 +41,9 @@
     "typecheck": "tsc -p tsconfig.json",
     "test": "tsx --test tests/**/*.test.ts",
     "check": "npm run typecheck && npm run test",
+    "publish:dry-run": "npm publish --dry-run",
+    "publish:dev": "npm publish --tag dev",
+    "release:dev": "npm version prerelease --preid dev && npm publish --tag dev",
     "prepack": "npm run check",
     "prepublishOnly": "npm run check"
   },

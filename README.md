@@ -80,6 +80,43 @@ Alternative Git install:
 pi install git:github.com/IgorWarzocha/pi-codex-conversion
 ```
 
+## Publishing
+
+This package is already configured for public npm publishes via:
+
+- `publishConfig.access = "public"`
+- `prepublishOnly` / `prepack` checks
+
+Useful commands:
+
+```bash
+npm run publish:dry-run
+npm run publish:dev
+npm run release:dev
+```
+
+What they do:
+
+- `npm run publish:dry-run` — inspect what would be published
+- `npm run publish:dev` — publish the current version under the `dev` dist-tag
+- `npm run release:dev` — bump the package to the next `-dev.N` prerelease and publish it under the `dev` dist-tag
+
+Typical flow:
+
+```bash
+npm login
+npm run publish:dry-run
+npm run release:dev
+```
+
+For modern npm auth, just run `npm login` and complete the browser flow when prompted.
+
+After publishing, install the dev build with:
+
+```bash
+pi install npm:@howaboua/pi-codex-conversion@dev
+```
+
 ## Prompt behavior
 
 The adapter does not build a standalone replacement prompt anymore. Instead it:
