@@ -85,6 +85,22 @@ test("keeps non-file-walking python scripts as raw runs", () => {
 	assert.deepEqual(summary.actions, [{ kind: "run", command: `python -c "print('hello')"` }]);
 });
 
+test("drops formatting helpers after search and list commands", () => {
+	const search = summarizeShellCommand("rg -n foo src | wc -l");
+	assert.equal(search.maskAsExplored, true);
+	assert.deepEqual(search.actions, [{ kind: "search", command: "rg -n foo src", query: "foo", path: "src" }]);
+
+	const list = summarizeShellCommand("rg --files | xargs echo");
+	assert.equal(list.maskAsExplored, true);
+	assert.deepEqual(list.actions, [{ kind: "list", command: "rg --files", path: undefined }]);
+});
+
+test("keeps mutating xargs pipelines as raw runs", () => {
+	const summary = summarizeShellCommand("rg -l foo src | xargs perl -pi -e 's/foo/bar/g'");
+	assert.equal(summary.maskAsExplored, false);
+	assert.deepEqual(summary.actions, [{ kind: "run", command: "rg -l foo src | xargs perl -pi -e 's/foo/bar/g'" }]);
+});
+
 test("classifies ripgrep searches separately from command runs", () => {
 	const search = summarizeShellCommand("rg -n adapter pi-codex-conversion");
 	assert.equal(search.maskAsExplored, true);

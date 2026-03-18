@@ -33,8 +33,24 @@ function parseMainTokens(tokens: string[]): ShellAction | null {
 	const [head, ...tail] = tokens;
 	if (!head) return null;
 
-	if (head === "echo" || head === "true" || head === "printf") {
+	if (
+		head === "echo" ||
+		head === "true" ||
+		head === "printf" ||
+		head === "wc" ||
+		head === "tr" ||
+		head === "cut" ||
+		head === "sort" ||
+		head === "uniq" ||
+		head === "tee" ||
+		head === "column" ||
+		head === "yes"
+	) {
 		return null;
+	}
+
+	if (head === "xargs") {
+		return xargsIsMutatingSubcommand(tail) ? { kind: "run", command: tokens.join(" ") } : null;
 	}
 
 	if (head === "ls" || head === "eza" || head === "exa") {
@@ -466,6 +482,32 @@ function isPythonCommand(command: string): boolean {
 
 function isPathish(value: string): boolean {
 	return value === "." || value === ".." || value.startsWith("./") || value.startsWith("../") || value.includes("/") || value.includes("\\");
+}
+
+function xargsIsMutatingSubcommand(tokens: string[]): boolean {
+	const subcommand = xargsSubcommand(tokens);
+	if (!subcommand || subcommand.length === 0) return false;
+	const [head, ...tail] = subcommand;
+	if (head === "perl" || head === "ruby") return xargsHasInPlaceFlag(tail);
+	if (head === "sed") return xargsHasInPlaceFlag(tail) || tail.includes("--in-place");
+	if (head === "rg") return tail.includes("--replace");
+	return false;
+}
+
+function xargsSubcommand(tokens: string[]): string[] | undefined {
+	let index = 0;
+	while (index < tokens.length) {
+		const token = tokens[index];
+		if (token === "--") return tokens.slice(index + 1);
+		if (!token.startsWith("-")) return tokens.slice(index);
+		const takesValue = token === "-E" || token === "-e" || token === "-I" || token === "-L" || token === "-n" || token === "-P" || token === "-s";
+		index += takesValue && token.length === 2 ? 2 : 1;
+	}
+	return undefined;
+}
+
+function xargsHasInPlaceFlag(tokens: string[]): boolean {
+	return tokens.some((token) => token === "-i" || token.startsWith("-i") || token === "-pi" || token.startsWith("-pi"));
 }
 
 function cdTarget(args: string[]): string | undefined {
