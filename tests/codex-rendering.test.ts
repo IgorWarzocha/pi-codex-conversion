@@ -44,6 +44,28 @@ test("exec tracker hides earlier grouped exploring rows and keeps the latest vis
 	);
 });
 
+test("exec tracker resolves persistent session completion to the originating tool call", () => {
+	const tracker = createExecCommandTracker();
+	tracker.recordStart("call-1", "npm test");
+	tracker.recordPersistentSession("call-1", 101);
+	tracker.recordEnd("call-1");
+
+	tracker.recordStart("call-2", "npm test");
+	tracker.recordPersistentSession("call-2", 202);
+	tracker.recordEnd("call-2");
+
+	tracker.recordSessionFinished(101);
+
+	assert.equal(tracker.getRenderInfo("call-1", "npm test").status, "done");
+	assert.equal(tracker.getRenderInfo("call-2", "npm test").status, "running");
+	assert.equal(tracker.getState("npm test"), "running");
+
+	tracker.recordSessionFinished(202);
+
+	assert.equal(tracker.getRenderInfo("call-2", "npm test").status, "done");
+	assert.equal(tracker.getState("npm test"), "done");
+});
+
 test("renderGroupedExecCommandCall keeps distinct reads that share a basename", () => {
 	const theme = createTheme();
 	const text = renderGroupedExecCommandCall(

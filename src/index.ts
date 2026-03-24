@@ -56,8 +56,8 @@ export default function codexConversion(pi: ExtensionAPI) {
 	registerWebSearchTool(pi);
 	registerWebSearchSessionNoteRenderer(pi);
 
-	sessions.onSessionExit((_sessionId, command) => {
-		tracker.recordCommandFinished(command);
+	sessions.onSessionExit((sessionId) => {
+		tracker.recordSessionFinished(sessionId);
 	});
 
 	pi.on("session_start", async (_event, ctx) => {

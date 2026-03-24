@@ -29,21 +29,35 @@ export interface ExecCommandTracker {
 	getRenderInfo(toolCallId: string | undefined, command: string): ExecCommandRenderInfo;
 	registerRenderContext(toolCallId: string | undefined, invalidate: () => void): void;
 	recordStart(toolCallId: string, command: string): void;
-	recordPersistentSession(command: string): void;
+	recordPersistentSession(toolCallId: string, sessionId: number): void;
 	recordEnd(toolCallId: string): void;
-	recordCommandFinished(command: string): void;
+	recordSessionFinished(sessionId: number): void;
 	resetExplorationGroup(): void;
 	clear(): void;
 }
 
 export function createExecCommandTracker(): ExecCommandTracker {
 	const commandByToolCallId = new Map<string, string>();
-	const executionStateByCommand = new Map<string, ExecCommandStatus>();
-	const persistentCommands = new Set<string>();
+	const runningCountsByCommand = new Map<string, number>();
+	const sessionBackedToolCallIds = new Set<string>();
+	const toolCallIdBySessionId = new Map<number, string>();
 	const entriesByToolCallId = new Map<string, ExecEntry>();
 	const groupsById = new Map<number, ExecGroup>();
 	let activeExplorationGroupId: number | undefined;
 	let nextGroupId = 1;
+
+	function incrementCommand(command: string): void {
+		runningCountsByCommand.set(command, (runningCountsByCommand.get(command) ?? 0) + 1);
+	}
+
+	function decrementCommand(command: string): void {
+		const next = (runningCountsByCommand.get(command) ?? 0) - 1;
+		if (next > 0) {
+			runningCountsByCommand.set(command, next);
+			return;
+		}
+		runningCountsByCommand.delete(command);
+	}
 
 	function invalidateToolCall(toolCallId: string | undefined): void {
 		if (!toolCallId) return;
@@ -71,16 +85,16 @@ export function createExecCommandTracker(): ExecCommandTracker {
 
 	return {
 		getState(command) {
-			return executionStateByCommand.get(command) ?? "running";
+			return (runningCountsByCommand.get(command) ?? 0) > 0 ? "running" : "done";
 		},
 		getRenderInfo(toolCallId, command) {
 			if (!toolCallId) {
-				return { hidden: false, status: executionStateByCommand.get(command) ?? "running" };
+				return { hidden: false, status: (runningCountsByCommand.get(command) ?? 0) > 0 ? "running" : "done" };
 			}
 
 			const entry = entriesByToolCallId.get(toolCallId);
 			if (!entry) {
-				return { hidden: false, status: executionStateByCommand.get(command) ?? "running" };
+				return { hidden: false, status: (runningCountsByCommand.get(command) ?? 0) > 0 ? "running" : "done" };
 			}
 
 			if (entry.hidden) {
@@ -113,7 +127,7 @@ export function createExecCommandTracker(): ExecCommandTracker {
 		},
 		recordStart(toolCallId, command) {
 			commandByToolCallId.set(toolCallId, command);
-			executionStateByCommand.set(command, "running");
+			incrementCommand(command);
 
 			const summary = summarizeShellCommand(command);
 			const entry: ExecEntry = {
@@ -149,10 +163,10 @@ export function createExecCommandTracker(): ExecCommandTracker {
 			group.visibleEntryId = toolCallId;
 			entry.groupId = group.id;
 		},
-		recordPersistentSession(command) {
-			persistentCommands.add(command);
-			executionStateByCommand.set(command, "running");
-			const entry = findLatestEntryByCommand(command);
+		recordPersistentSession(toolCallId, sessionId) {
+			sessionBackedToolCallIds.add(toolCallId);
+			toolCallIdBySessionId.set(sessionId, toolCallId);
+			const entry = entriesByToolCallId.get(toolCallId);
 			if (!entry) return;
 			entry.status = "running";
 			const group = getGroupForEntry(entry);
@@ -162,10 +176,8 @@ export function createExecCommandTracker(): ExecCommandTracker {
 			const command = commandByToolCallId.get(toolCallId);
 			if (!command) return;
 			const entry = entriesByToolCallId.get(toolCallId);
-			// Pi renderers do not currently receive toolCallId, so we track the
-			// last-known state per command string for compact Exploring/Explored UI.
-			if (!persistentCommands.has(command)) {
-				executionStateByCommand.set(command, "done");
+			if (!sessionBackedToolCallIds.has(toolCallId)) {
+				decrementCommand(command);
 				if (entry) {
 					entry.status = "done";
 				}
@@ -174,12 +186,15 @@ export function createExecCommandTracker(): ExecCommandTracker {
 			invalidateToolCall(group?.visibleEntryId ?? toolCallId);
 			commandByToolCallId.delete(toolCallId);
 		},
-		recordCommandFinished(command) {
-			persistentCommands.delete(command);
-			executionStateByCommand.set(command, "done");
-			const entry = findLatestEntryByCommand(command);
+		recordSessionFinished(sessionId) {
+			const toolCallId = toolCallIdBySessionId.get(sessionId);
+			if (!toolCallId) return;
+			toolCallIdBySessionId.delete(sessionId);
+			const entry = entriesByToolCallId.get(toolCallId);
 			if (!entry) return;
+			decrementCommand(entry.command);
 			entry.status = "done";
+			sessionBackedToolCallIds.delete(toolCallId);
 			const group = getGroupForEntry(entry);
 			invalidateToolCall(group?.visibleEntryId ?? entry.toolCallId);
 		},
@@ -188,8 +203,9 @@ export function createExecCommandTracker(): ExecCommandTracker {
 		},
 		clear() {
 			commandByToolCallId.clear();
-			executionStateByCommand.clear();
-			persistentCommands.clear();
+			runningCountsByCommand.clear();
+			sessionBackedToolCallIds.clear();
+			toolCallIdBySessionId.clear();
 			entriesByToolCallId.clear();
 			groupsById.clear();
 			activeExplorationGroupId = undefined;

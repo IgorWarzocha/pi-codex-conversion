@@ -124,14 +124,14 @@ export function registerExecCommandTool(pi: ExtensionAPI, tracker: ExecCommandTr
 			"Keep tty disabled unless the command truly needs interactive terminal behavior.",
 		],
 		parameters: EXEC_COMMAND_PARAMETERS,
-		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+		async execute(toolCallId, params, signal, _onUpdate, ctx) {
 			if (signal?.aborted) {
 				throw new Error("exec_command aborted");
 			}
 			const typedParams = parseExecCommandParams(params);
 			const result = await sessions.exec(typedParams, ctx.cwd, signal);
 			if (result.session_id !== undefined) {
-				tracker.recordPersistentSession(typedParams.cmd);
+				tracker.recordPersistentSession(toolCallId, result.session_id);
 			}
 			return {
 				content: [{ type: "text", text: formatUnifiedExecResult(result, typedParams.cmd) }],
