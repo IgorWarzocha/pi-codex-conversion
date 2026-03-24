@@ -143,3 +143,7 @@ That keeps the prompt much closer to `pi-mono` while still steering the model to
 ## License
 
 MIT
+
+## Links
+
+[![Hypercommit](https://img.shields.io/badge/Hypercommit-DB2475)](https://hypercommit.com/pi-codex-conversion)
