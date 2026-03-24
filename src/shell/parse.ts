@@ -18,12 +18,6 @@ export function parseShellPart(tokens: string[], cwd?: string): ShellAction | nu
 			path: joinPaths(cwd, parsed.path),
 		};
 	}
-	if (parsed.kind === "list" && cwd && !parsed.path) {
-		return {
-			...parsed,
-			path: shortDisplayPath(cwd),
-		};
-	}
 
 	return parsed;
 }

@@ -147,8 +147,8 @@ test("supports fd and find summaries", () => {
 	assert.deepEqual(summarizeShellCommand("find src -type f").actions, [{ kind: "list", command: "find src -type f", path: "src" }]);
 });
 
-test("tracks cwd for list commands and strips powershell wrappers", () => {
-	assert.deepEqual(summarizeShellCommand("cd codex-rs && rg --files").actions, [{ kind: "list", command: "rg --files", path: "codex-rs" }]);
+test("matches codex list cwd handling and strips powershell wrappers", () => {
+	assert.deepEqual(summarizeShellCommand("cd codex-rs && rg --files").actions, [{ kind: "list", command: "rg --files" }]);
 	assert.deepEqual(summarizeShellCommand("powershell -Command Get-ChildItem").actions, [{ kind: "run", command: "Get-ChildItem" }]);
 	assert.deepEqual(summarizeShellCommand("pwsh -NoProfile -c 'Write-Host hi'").actions, [{ kind: "run", command: "Write-Host hi" }]);
 });
@@ -269,15 +269,34 @@ test("covers remaining upstream parser edge cases", () => {
 	assert.deepEqual(summarizeShellCommand(`bash -lc 'cd /Users/pakrym/code/codex && rg -n "codex_api" codex-rs -S | head -n 50'`).actions, [
 		{ kind: "search", command: "rg -n codex_api codex-rs -S", query: "codex_api", path: "codex-rs" },
 	]);
+	assert.deepEqual(summarizeShellCommand(`bat --theme TwoDark README.md`).actions, [
+		{ kind: "read", command: "bat --theme TwoDark README.md", name: "README.md", path: "README.md" },
+	]);
+	assert.deepEqual(summarizeShellCommand(`batcat README.md`).actions, [
+		{ kind: "read", command: "batcat README.md", name: "README.md", path: "README.md" },
+	]);
 	assert.deepEqual(summarizeShellCommand(`rg -n 'foo bar' -S`).actions, [{ kind: "search", command: `rg -n 'foo bar' -S`, query: "foo bar" }]);
 	assert.deepEqual(summarizeShellCommand(`grep -R src/main.rs -n .`).actions, [{ kind: "search", command: "grep -R src/main.rs -n .", query: "src/main.rs", path: "." }]);
+	assert.deepEqual(summarizeShellCommand(`grep -l TODO src`).actions, [{ kind: "search", command: "grep -l TODO src", query: "TODO", path: "src" }]);
 	assert.deepEqual(summarizeShellCommand(`ag -l TODO src`).actions, [{ kind: "search", command: "ag -l TODO src", query: "TODO", path: "src" }]);
 	assert.deepEqual(summarizeShellCommand(`ack -l TODO src`).actions, [{ kind: "search", command: "ack -l TODO src", query: "TODO", path: "src" }]);
 	assert.deepEqual(summarizeShellCommand(`pt -l TODO src`).actions, [{ kind: "search", command: "pt -l TODO src", query: "TODO", path: "src" }]);
+	assert.deepEqual(summarizeShellCommand(`rga TODO src`).actions, [{ kind: "search", command: "rga TODO src", query: "TODO", path: "src" }]);
+	assert.deepEqual(summarizeShellCommand(`ripgrep-all TODO src`).actions, [{ kind: "search", command: "ripgrep-all TODO src", query: "TODO", path: "src" }]);
 	assert.deepEqual(summarizeShellCommand(`head -n50 Cargo.toml`).actions, [{ kind: "read", command: "head -n50 Cargo.toml", name: "Cargo.toml", path: "Cargo.toml" }]);
 	assert.deepEqual(summarizeShellCommand(`bash -lc 'head -n50 Cargo.toml'`).actions, [{ kind: "read", command: "head -n50 Cargo.toml", name: "Cargo.toml", path: "Cargo.toml" }]);
+	assert.deepEqual(summarizeShellCommand(`sed -n -e 10p file.txt`).actions, [{ kind: "read", command: "sed -n -e 10p file.txt", name: "file.txt", path: "file.txt" }]);
+	assert.deepEqual(summarizeShellCommand(`sed -n 10p -- file.txt`).actions, [{ kind: "read", command: "sed -n 10p -- file.txt", name: "file.txt", path: "file.txt" }]);
 	assert.deepEqual(summarizeShellCommand(`rg --files | head -n 1`).actions, [{ kind: "list", command: "rg --files" }]);
+	assert.deepEqual(summarizeShellCommand(`bash -c 'rg --files | head -n 1'`).actions, [{ kind: "list", command: "rg --files" }]);
 	assert.deepEqual(summarizeShellCommand(`bash -lc 'tail -n+10 README.md'`).actions, [{ kind: "read", command: "tail -n+10 README.md", name: "README.md", path: "README.md" }]);
+	assert.deepEqual(
+		summarizeShellCommand(`printf '\n===== ansi-escape/Cargo.toml =====\n'; cat -- ansi-escape/Cargo.toml`).actions,
+		[{ kind: "read", command: "cat -- ansi-escape/Cargo.toml", name: "Cargo.toml", path: "ansi-escape/Cargo.toml" }],
+	);
+	assert.deepEqual(summarizeShellCommand(`nl -ba core/src/parse_command.rs | sed -n '1200,1720p'`).actions, [
+		{ kind: "read", command: "nl -ba core/src/parse_command.rs", name: "parse_command.rs", path: "core/src/parse_command.rs" },
+	]);
 	assert.deepEqual(summarizeShellCommand(`pwsh -NoProfile -c 'Write-Host hi'`).actions, [{ kind: "run", command: "Write-Host hi" }]);
 	assert.equal(isSmallFormattingCommand([]), false);
 });

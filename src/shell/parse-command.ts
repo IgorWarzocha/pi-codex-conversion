@@ -61,8 +61,6 @@ function parseCommandImpl(command: string[]): ParsedShellCommand[] {
 		const parsed = summarizeMainTokens(tokens);
 		if (parsed.kind === "read" && cwd) {
 			commands.push({ ...parsed, path: joinPaths(cwd, parsed.path) });
-		} else if (parsed.kind === "list" && cwd && !parsed.path) {
-			commands.push({ ...parsed, path: shortDisplayPath(cwd) });
 		} else {
 			commands.push(parsed);
 		}
