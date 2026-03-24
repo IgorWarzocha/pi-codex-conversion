@@ -93,8 +93,8 @@ function coalesceReadGroups(actionGroups: ShellAction[][]): ShellAction[] {
 	for (let index = 0; index < actionGroups.length; index += 1) {
 		const actions = actionGroups[index];
 		if (actions.every((action) => action.kind === "read")) {
-			const names: string[] = [];
-			const seen = new Set<string>();
+			const reads: Extract<ShellAction, { kind: "read" }>[] = [];
+			const seenPaths = new Set<string>();
 			let lastRead: Extract<ShellAction, { kind: "read" }> | undefined;
 
 			for (let readIndex = index; readIndex < actionGroups.length; readIndex += 1) {
@@ -106,19 +106,29 @@ function coalesceReadGroups(actionGroups: ShellAction[][]): ShellAction[] {
 				for (const action of readActions) {
 					if (action.kind !== "read") continue;
 					lastRead = action;
-					if (seen.has(action.name)) continue;
-					seen.add(action.name);
-					names.push(action.name);
+					if (seenPaths.has(action.path)) continue;
+					seenPaths.add(action.path);
+					reads.push(action);
 				}
 
 				index = readIndex;
 			}
 
 			if (lastRead) {
+				const duplicateNames = new Set<string>();
+				const seenNames = new Set<string>();
+				for (const read of reads) {
+					if (seenNames.has(read.name)) {
+						duplicateNames.add(read.name);
+						continue;
+					}
+					seenNames.add(read.name);
+				}
+				const labels = reads.map((read) => (duplicateNames.has(read.name) ? read.path : read.name));
 				flattened.push({
 					kind: "read",
-					command: names.join(" && "),
-					name: names.join(", "),
+					command: labels.join(" && "),
+					name: labels.join(", "),
 					path: lastRead.path,
 				});
 			}

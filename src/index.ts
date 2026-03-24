@@ -1,7 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { getCodexRuntimeShell } from "./adapter/runtime-shell.ts";
 import { CORE_ADAPTER_TOOL_NAMES, DEFAULT_TOOL_NAMES, STATUS_KEY, STATUS_TEXT, VIEW_IMAGE_TOOL_NAME, WEB_SEARCH_TOOL_NAME } from "./adapter/tool-set.ts";
-import { registerApplyPatchTool } from "./tools/apply-patch-tool.ts";
+import { clearApplyPatchRenderState, registerApplyPatchTool } from "./tools/apply-patch-tool.ts";
 import { isCodexLikeContext, isOpenAICodexContext } from "./adapter/codex-model.ts";
 import { createExecCommandTracker } from "./tools/exec-command-state.ts";
 import { registerExecCommandTool } from "./tools/exec-command-tool.ts";
@@ -62,6 +62,7 @@ export default function codexConversion(pi: ExtensionAPI) {
 
 	pi.on("session_start", async (_event, ctx) => {
 		state.webSearchNoticeShown = false;
+		clearApplyPatchRenderState();
 		tracker.clear();
 		syncAdapter(pi, ctx, state);
 	});
@@ -92,6 +93,7 @@ export default function codexConversion(pi: ExtensionAPI) {
 	});
 
 	pi.on("session_shutdown", async () => {
+		clearApplyPatchRenderState();
 		sessions.shutdown();
 	});
 

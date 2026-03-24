@@ -43,3 +43,17 @@ test("exec tracker hides earlier grouped exploring rows and keeps the latest vis
 		],
 	);
 });
+
+test("renderGroupedExecCommandCall keeps distinct reads that share a basename", () => {
+	const theme = createTheme();
+	const text = renderGroupedExecCommandCall(
+		[
+			[{ kind: "read", command: "cat src/index.ts", name: "index.ts", path: "src/index.ts" }],
+			[{ kind: "read", command: "cat tests/index.ts", name: "index.ts", path: "tests/index.ts" }],
+		],
+		"done",
+		theme,
+	);
+
+	assert.equal(text, "• Explored\n  └ Read src/index.ts, tests/index.ts");
+});
