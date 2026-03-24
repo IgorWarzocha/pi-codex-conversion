@@ -84,8 +84,19 @@ export function shellSplit(input: string): string[] {
 
 export function shellQuote(token: string): string {
 	if (token.length === 0) return "''";
-	if (/^[A-Za-z0-9_@%+=:,./-]+$/.test(token)) return token;
+	if (canEmitUnquoted(token)) return token;
 	return `'${token.replace(/'/g, `'"'"'`)}'`;
+}
+
+function canEmitUnquoted(token: string): boolean {
+	for (const char of token) {
+		if (!isUnquotedOk(char)) return false;
+	}
+	return true;
+}
+
+function isUnquotedOk(char: string): boolean {
+	return /^[+\-./:@\]_0-9A-Za-z]$/.test(char);
 }
 
 export function joinCommandTokens(tokens: string[]): string {
