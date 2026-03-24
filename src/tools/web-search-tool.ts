@@ -1,6 +1,6 @@
 import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
-import { Box, Text } from "@mariozechner/pi-tui";
+import { Box, Container, Text } from "@mariozechner/pi-tui";
 import { isOpenAICodexModel } from "../adapter/codex-model.ts";
 
 export const WEB_SEARCH_UNSUPPORTED_MESSAGE = "web_search is only available with the openai-codex provider";
@@ -54,6 +54,10 @@ export function supportsMultimodalNativeWebSearch(model: ExtensionContext["model
 
 function isWebSearchFunctionTool(tool: unknown): tool is FunctionToolPayload {
 	return !!tool && typeof tool === "object" && (tool as FunctionToolPayload).type === "function" && (tool as FunctionToolPayload).name === "web_search";
+}
+
+function createEmptyResultComponent(): Container {
+	return new Container();
 }
 
 export function rewriteNativeWebSearchTool(payload: unknown, model: ExtensionContext["model"]): unknown {
@@ -113,7 +117,7 @@ export function createWebSearchTool(): ToolDefinition<typeof WEB_SEARCH_PARAMETE
 		},
 		renderResult(result, { expanded }, theme) {
 			if (!expanded) {
-				return undefined;
+				return createEmptyResultComponent();
 			}
 			const textBlock = result.content.find((item) => item.type === "text");
 			const text = textBlock?.type === "text" ? textBlock.text : "(no output)";

@@ -1,6 +1,6 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
-import { Text } from "@mariozechner/pi-tui";
+import { Container, Text } from "@mariozechner/pi-tui";
 import { renderWriteStdinCall } from "./codex-rendering.ts";
 import type { ExecSessionManager, UnifiedExecResult } from "./exec-session-manager.ts";
 import { formatUnifiedExecResult } from "./unified-exec-format.ts";
@@ -100,6 +100,10 @@ function isUnifiedExecResult(details: unknown): details is UnifiedExecResult {
 	return typeof details === "object" && details !== null;
 }
 
+function createEmptyResultComponent(): Container {
+	return new Container();
+}
+
 export function registerWriteStdinTool(pi: ExtensionAPI, sessions: ExecSessionManager): void {
 	pi.registerTool({
 		name: "write_stdin",
@@ -129,7 +133,7 @@ export function registerWriteStdinTool(pi: ExtensionAPI, sessions: ExecSessionMa
 			return new Text(renderWriteStdinCall(sessionId, input, command, theme), 0, 0);
 		},
 		renderResult(result, { expanded, isPartial }, theme) {
-			if (isPartial || !expanded) return undefined;
+			if (isPartial || !expanded) return createEmptyResultComponent();
 			const state = getResultState(result);
 			const output = renderTerminalText(state.output);
 			let text = theme.fg("dim", output || "(no output)");

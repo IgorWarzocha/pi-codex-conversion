@@ -145,3 +145,34 @@ test("write_stdin renderResult falls back to running-session state from formatte
 		sessions.shutdown();
 	}
 });
+
+test("write_stdin renderResult returns an empty component for collapsed or partial states", () => {
+	const sessions = createExecSessionManager();
+	const { pi, getTool } = createRegisteredTool();
+	registerWriteStdinTool(pi, sessions);
+	const theme = createTheme();
+
+	try {
+		const collapsed = getTool().renderResult?.(
+			{
+				content: [{ type: "text", text: "ignored" }],
+			},
+			{ expanded: false, isPartial: false },
+			theme,
+		);
+		assert.ok(collapsed);
+		assert.deepEqual(collapsed.render(120), []);
+
+		const partial = getTool().renderResult?.(
+			{
+				content: [{ type: "text", text: "ignored" }],
+			},
+			{ expanded: true, isPartial: true },
+			theme,
+		);
+		assert.ok(partial);
+		assert.deepEqual(partial.render(120), []);
+	} finally {
+		sessions.shutdown();
+	}
+});

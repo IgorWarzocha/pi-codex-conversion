@@ -35,6 +35,16 @@ function getCommandArg(args: unknown): string | undefined {
 	return args.cmd;
 }
 
+function isToolCallOnlyAssistantMessage(message: unknown): boolean {
+	if (!message || typeof message !== "object" || !("role" in message) || message.role !== "assistant") {
+		return false;
+	}
+	if (!("content" in message) || !Array.isArray(message.content) || message.content.length === 0) {
+		return false;
+	}
+	return message.content.every((item) => typeof item === "object" && item !== null && "type" in item && item.type === "toolCall");
+}
+
 export default function codexConversion(pi: ExtensionAPI) {
 	const tracker = createExecCommandTracker();
 	const state: AdapterState = { enabled: false, promptSkills: [], webSearchNoticeShown: false };
@@ -52,6 +62,7 @@ export default function codexConversion(pi: ExtensionAPI) {
 
 	pi.on("session_start", async (_event, ctx) => {
 		state.webSearchNoticeShown = false;
+		tracker.clear();
 		syncAdapter(pi, ctx, state);
 	});
 
@@ -59,8 +70,17 @@ export default function codexConversion(pi: ExtensionAPI) {
 		syncAdapter(pi, ctx, state);
 	});
 
+	pi.on("message_start", async (event) => {
+		if (event.message.role === "toolResult") return;
+		if (isToolCallOnlyAssistantMessage(event.message)) return;
+		tracker.resetExplorationGroup();
+	});
+
 	pi.on("tool_execution_start", async (event) => {
-		if (event.toolName !== "exec_command") return;
+		if (event.toolName !== "exec_command") {
+			tracker.resetExplorationGroup();
+			return;
+		}
 		const command = getCommandArg(event.args);
 		if (!command) return;
 		tracker.recordStart(event.toolCallId, command);

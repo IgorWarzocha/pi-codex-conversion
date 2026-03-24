@@ -123,3 +123,21 @@ test("createWebSearchTool exposes a strict zero-argument schema and agent-facing
 	assert.equal((tool.parameters as { additionalProperties?: unknown }).additionalProperties, false);
 	assert.equal("properties" in (tool.parameters as object), false);
 });
+
+test("createWebSearchTool renderResult returns an empty component when collapsed", () => {
+	const tool = createWebSearchTool();
+	const component = tool.renderResult?.(
+		{
+			content: [{ type: "text", text: "hidden" }],
+			details: undefined,
+		},
+		{ expanded: false, isPartial: false },
+		{
+			fg: (_role: string, text: string) => text,
+			bold: (text: string) => text,
+		} as never,
+	);
+
+	assert.ok(component);
+	assert.deepEqual(component.render(120), []);
+});

@@ -1,7 +1,7 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
-import { Text } from "@mariozechner/pi-tui";
-import { renderExecCommandCall } from "./codex-rendering.ts";
+import { Container, Text } from "@mariozechner/pi-tui";
+import { renderExecCommandCall, renderGroupedExecCommandCall } from "./codex-rendering.ts";
 import type { ExecCommandTracker } from "./exec-command-state.ts";
 import type { ExecSessionManager, UnifiedExecResult } from "./exec-session-manager.ts";
 import { formatUnifiedExecResult } from "./unified-exec-format.ts";
@@ -56,6 +56,62 @@ function isUnifiedExecResult(details: unknown): details is UnifiedExecResult {
 	return typeof details === "object" && details !== null;
 }
 
+function createEmptyResultComponent(): Container {
+	return new Container();
+}
+
+interface ExecCommandRenderContextLike {
+	toolCallId?: string;
+	invalidate?: () => void;
+}
+
+const renderExecCommandCallWithOptionalContext: any = (
+	args: { cmd?: unknown },
+	theme: { fg(role: string, text: string): string; bold(text: string): string },
+	context: ExecCommandRenderContextLike | undefined,
+	tracker: ExecCommandTracker,
+) => {
+	const command = typeof args.cmd === "string" ? args.cmd : "";
+	tracker.registerRenderContext(context?.toolCallId, context?.invalidate ?? (() => {}));
+	const renderInfo = tracker.getRenderInfo(context?.toolCallId, command);
+	if (renderInfo.hidden) {
+		return new Text("", 0, 0);
+	}
+	const text = renderInfo.actionGroups
+		? renderGroupedExecCommandCall(renderInfo.actionGroups, renderInfo.status, theme)
+		: renderExecCommandCall(command, renderInfo.status, theme);
+	return new Text(text, 0, 0);
+};
+
+const renderExecCommandResultWithOptionalContext: any = (
+	result: { content: Array<{ type: string; text?: string }>; details?: unknown },
+	options: { expanded: boolean; isPartial: boolean },
+	theme: { fg(role: string, text: string): string },
+	context: ExecCommandRenderContextLike | undefined,
+	tracker: ExecCommandTracker,
+) => {
+	if (options.isPartial || !options.expanded) {
+		return createEmptyResultComponent();
+	}
+
+	const command = context && "args" in context && context.args && typeof (context as any).args.cmd === "string" ? (context as any).args.cmd : undefined;
+	if (tracker.getRenderInfo(context?.toolCallId, command ?? "").hidden) {
+		return createEmptyResultComponent();
+	}
+
+	const details = isUnifiedExecResult(result.details) ? result.details : undefined;
+	const content = result.content.find((item) => item.type === "text");
+	const output = details?.output ?? (content?.type === "text" ? content.text : "");
+	let text = theme.fg("dim", output || "(no output)");
+	if (details?.session_id !== undefined) {
+		text += `\n${theme.fg("accent", `Session ${details.session_id} still running`)}`;
+	}
+	if (details?.exit_code !== undefined) {
+		text += `\n${theme.fg("muted", `Exit code: ${details.exit_code}`)}`;
+	}
+	return new Text(text, 0, 0);
+};
+
 export function registerExecCommandTool(pi: ExtensionAPI, tracker: ExecCommandTracker, sessions: ExecSessionManager): void {
 	pi.registerTool({
 		name: "exec_command",
@@ -82,26 +138,13 @@ export function registerExecCommandTool(pi: ExtensionAPI, tracker: ExecCommandTr
 				details: result,
 			};
 		},
-		renderCall(args, theme) {
-			const command = typeof args.cmd === "string" ? args.cmd : "";
-			return new Text(renderExecCommandCall(command, tracker.getState(command), theme), 0, 0);
-		},
-		renderResult(result, { expanded, isPartial }, theme) {
-			if (isPartial || !expanded) {
-				return undefined;
-			}
-
-			const details = isUnifiedExecResult(result.details) ? result.details : undefined;
-			const content = result.content.find((item) => item.type === "text");
-			const output = details?.output ?? (content?.type === "text" ? content.text : "");
-			let text = theme.fg("dim", output || "(no output)");
-			if (details?.session_id !== undefined) {
-				text += `\n${theme.fg("accent", `Session ${details.session_id} still running`)}`;
-			}
-			if (details?.exit_code !== undefined) {
-				text += `\n${theme.fg("muted", `Exit code: ${details.exit_code}`)}`;
-			}
-			return new Text(text, 0, 0);
-		},
+		renderCall: ((args: { cmd?: unknown }, theme: { fg(role: string, text: string): string; bold(text: string): string }, context?: ExecCommandRenderContextLike) =>
+			renderExecCommandCallWithOptionalContext(args, theme, context, tracker)) as any,
+		renderResult: ((
+			result: { content: Array<{ type: string; text?: string }>; details?: unknown },
+			options: { expanded: boolean; isPartial: boolean },
+			theme: { fg(role: string, text: string): string },
+			context?: ExecCommandRenderContextLike,
+		) => renderExecCommandResultWithOptionalContext(result, options, theme, context, tracker)) as any,
 	});
 }

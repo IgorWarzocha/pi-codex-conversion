@@ -8,7 +8,11 @@ export interface RenderTheme {
 
 export function renderExecCommandCall(command: string, state: ExecCommandStatus, theme: RenderTheme): string {
 	const summary = summarizeShellCommand(command);
-	return summary.maskAsExplored ? renderExplorationText(summary.actions, state, theme) : renderCommandText(command, state, theme);
+	return summary.maskAsExplored ? renderExplorationText([summary.actions], state, theme) : renderCommandText(command, state, theme);
+}
+
+export function renderGroupedExecCommandCall(actionGroups: ShellAction[][], state: ExecCommandStatus, theme: RenderTheme): string {
+	return renderExplorationText(actionGroups, state, theme);
 }
 
 export function renderWriteStdinCall(
@@ -32,11 +36,11 @@ export function renderWriteStdinCall(
 	return text;
 }
 
-function renderExplorationText(actions: ShellAction[], state: ExecCommandStatus, theme: RenderTheme): string {
+function renderExplorationText(actionGroups: ShellAction[][], state: ExecCommandStatus, theme: RenderTheme): string {
 	const header = state === "running" ? "Exploring" : "Explored";
 	let text = `${theme.fg("dim", "•")} ${theme.bold(header)}`;
 
-	for (const [index, line] of coalesceReads(actions).map(formatActionLine).entries()) {
+	for (const [index, line] of coalesceReadGroups(actionGroups).map(formatActionLine).entries()) {
 		const prefix = index === 0 ? "  └ " : "    ";
 		text += `\n${theme.fg("dim", prefix)}${theme.fg("accent", line.title)} ${theme.fg("muted", line.body)}`;
 	}
@@ -83,13 +87,46 @@ function formatActionLine(action: ShellAction): { title: string; body: string } 
 	return { title: "Run", body: action.command };
 }
 
-function coalesceReads(actions: ShellAction[]): ShellAction[] {
-	if (!actions.every((action) => action.kind !== "run")) return actions;
-	const reads = actions.filter((action): action is Extract<ShellAction, { kind: "read" }> => action.kind === "read");
-	if (reads.length !== actions.length) {
-		return actions;
+function coalesceReadGroups(actionGroups: ShellAction[][]): ShellAction[] {
+	const flattened: ShellAction[] = [];
+
+	for (let index = 0; index < actionGroups.length; index += 1) {
+		const actions = actionGroups[index];
+		if (actions.every((action) => action.kind === "read")) {
+			const names: string[] = [];
+			const seen = new Set<string>();
+			let lastRead: Extract<ShellAction, { kind: "read" }> | undefined;
+
+			for (let readIndex = index; readIndex < actionGroups.length; readIndex += 1) {
+				const readActions = actionGroups[readIndex];
+				if (!readActions.every((action) => action.kind === "read")) {
+					break;
+				}
+
+				for (const action of readActions) {
+					if (action.kind !== "read") continue;
+					lastRead = action;
+					if (seen.has(action.name)) continue;
+					seen.add(action.name);
+					names.push(action.name);
+				}
+
+				index = readIndex;
+			}
+
+			if (lastRead) {
+				flattened.push({
+					kind: "read",
+					command: names.join(" && "),
+					name: names.join(", "),
+					path: lastRead.path,
+				});
+			}
+			continue;
+		}
+
+		flattened.push(...actions);
 	}
 
-	const names = [...new Set(reads.map((action) => action.name))];
-	return [{ kind: "read", command: reads.map((action) => action.command).join(" && "), name: names.join(", "), path: reads[0].path }];
+	return flattened;
 }
