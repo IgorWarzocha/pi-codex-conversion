@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -192,6 +192,43 @@ test("executePatch leaves earlier changes applied when a later hunk fails", asyn
 
 		assert.equal(readFileSync(join(cwd, "created.txt"), "utf8"), "hello\n");
 	} finally {
+		await rm(cwd, { recursive: true, force: true });
+	}
+});
+
+test("executePatch reports partial move side effects when unlink fails after writing the destination", async () => {
+	const cwd = mkdtempSync(join(tmpdir(), "pi-codex-conversion-"));
+	const lockedDir = join(cwd, "locked");
+	try {
+		mkdirSync(lockedDir, { recursive: true });
+		writeFileSync(join(lockedDir, "source.txt"), "from\n", "utf8");
+		chmodSync(lockedDir, 0o555);
+
+		let error: unknown;
+		try {
+			executePatch({
+				cwd,
+				patchText: `*** Begin Patch
+*** Update File: locked/source.txt
+*** Move to: moved/source.txt
+@@
+-from
++to
+*** End Patch`,
+			});
+		} catch (caught) {
+			error = caught;
+		}
+
+		assert.ok(error instanceof ExecutePatchError);
+		assert.deepEqual(error.result.changedFiles, ["moved/source.txt"]);
+		assert.deepEqual(error.result.createdFiles, ["moved/source.txt"]);
+		assert.deepEqual(error.result.deletedFiles, []);
+		assert.deepEqual(error.result.movedFiles, []);
+		assert.equal(readFileSync(join(cwd, "moved/source.txt"), "utf8"), "to\n");
+		assert.equal(readFileSync(join(lockedDir, "source.txt"), "utf8"), "from\n");
+	} finally {
+		chmodSync(lockedDir, 0o755);
 		await rm(cwd, { recursive: true, force: true });
 	}
 });

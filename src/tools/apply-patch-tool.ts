@@ -85,12 +85,29 @@ function renderPartialFailureCall(
 	lines[0] = lines[0].replace(/^• (Added|Edited|Deleted)\b/, theme.fg("warning", "• Edit partially failed"));
 	if (failedTarget) {
 		for (let i = 0; i < lines.length; i += 1) {
-			if (lines[i].includes(failedTarget)) {
-				lines[i] = theme.fg("error", lines[i].replace(failedTarget, `${failedTarget} failed`));
+			const failedLine = markFailedTargetLine(lines[i], failedTarget);
+			if (failedLine) {
+				lines[i] = theme.fg("error", failedLine);
 			}
 		}
 	}
 	return lines.join("\n");
+}
+
+function markFailedTargetLine(line: string, failedTarget: string): string | undefined {
+	const suffixMatch = line.match(/ \(\+\d+ -\d+\)$/);
+	if (!suffixMatch) {
+		return undefined;
+	}
+	const suffix = suffixMatch[0];
+	const prefixAndTarget = line.slice(0, -suffix.length);
+	const candidatePrefixes = ["• Edit partially failed ", "• Added ", "• Edited ", "• Deleted ", "  └ ", "    "];
+	for (const prefix of candidatePrefixes) {
+		if (prefixAndTarget === `${prefix}${failedTarget}`) {
+			return `${prefix}${failedTarget} failed${suffix}`;
+		}
+	}
+	return undefined;
 }
 
 function summarizePatchCounts(result: ExecutePatchResult): string {

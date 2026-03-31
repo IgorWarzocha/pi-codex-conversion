@@ -178,3 +178,39 @@ test("apply_patch renderCall marks failed absolute-path entries inline using dis
 		await rm(cwd, { recursive: true, force: true });
 	}
 });
+
+test("apply_patch renderCall only marks the exact failed entry inline", async () => {
+	const cwd = mkdtempSync(join(tmpdir(), "pi-codex-conversion-"));
+	const { pi, getTool } = createRegisteredTool();
+	registerApplyPatchTool(pi);
+	const theme = createTheme();
+
+	try {
+		const patch = `*** Begin Patch
+*** Add File: foo.txt.bak
++ok
+*** Update File: foo.txt
+@@
+-old
++new
+*** End Patch`;
+		const tool = getTool();
+		const execute = tool.execute;
+		const renderCall = tool.renderCall;
+		assert.ok(execute);
+		assert.ok(renderCall);
+
+		await execute("call-substring-partial-failure", { input: patch }, undefined, undefined, { cwd });
+
+		const collapsed = renderComponentText(
+			renderCall({ input: patch }, theme, { toolCallId: "call-substring-partial-failure", expanded: false, cwd }),
+		);
+
+		assert.match(collapsed, /foo\.txt failed \(\+1 -1\)/);
+		assert.doesNotMatch(collapsed, /foo\.txt failed\.bak/);
+		assert.match(collapsed, /foo\.txt\.bak \(\+1 -0\)/);
+	} finally {
+		clearApplyPatchRenderState();
+		await rm(cwd, { recursive: true, force: true });
+	}
+});

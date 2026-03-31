@@ -127,19 +127,21 @@ function applyMove({
 
 	mkdirSync(dirname(toAbsolutePath), { recursive: true });
 	writeFileSync(toAbsolutePath, content, "utf8");
-	if (fromAbsolutePath !== toAbsolutePath) {
-		unlinkSync(fromAbsolutePath);
-	}
-
-	changedFiles.add(path);
 	changedFiles.add(movePath);
-	movedFiles.add(`${path} -> ${movePath}`);
 	if (!destinationExisted) {
 		createdFiles.add(movePath);
 	}
+
 	if (fromAbsolutePath !== toAbsolutePath) {
+		unlinkSync(fromAbsolutePath);
+		changedFiles.add(path);
+		movedFiles.add(`${path} -> ${movePath}`);
 		deletedFiles.add(path);
+		return;
 	}
+
+	changedFiles.add(path);
+	movedFiles.add(`${path} -> ${movePath}`);
 }
 
 function applyAction({
