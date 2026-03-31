@@ -73,6 +73,18 @@ function setApplyPatchRenderState(
 	});
 }
 
+function markApplyPatchPartialFailure(toolCallId: string, failedTarget?: string): void {
+	const existing = applyPatchRenderStates.get(toolCallId);
+	if (!existing) {
+		return;
+	}
+	applyPatchRenderStates.set(toolCallId, {
+		...existing,
+		status: "partial_failure",
+		failedTarget,
+	});
+}
+
 function renderPartialFailureCall(
 	text: string,
 	theme: { fg(role: string, text: string): string },
@@ -82,16 +94,28 @@ function renderPartialFailureCall(
 	if (lines.length === 0) {
 		return theme.fg("warning", "• Edit partially failed");
 	}
-	lines[0] = lines[0].replace(/^• (Added|Edited|Deleted)\b/, theme.fg("warning", "• Edit partially failed"));
+	lines[0] = lines[0].replace(/^• (Added|Edited|Deleted)\b/, "• Edit partially failed");
+	const failedLineIndexes = new Set<number>();
 	if (failedTarget) {
 		for (let i = 0; i < lines.length; i += 1) {
 			const failedLine = markFailedTargetLine(lines[i], failedTarget);
 			if (failedLine) {
-				lines[i] = theme.fg("error", failedLine);
+				lines[i] = failedLine;
+				failedLineIndexes.add(i);
 			}
 		}
 	}
-	return lines.join("\n");
+	return lines
+		.map((line, index) => {
+			if (failedLineIndexes.has(index)) {
+				return theme.fg("error", line);
+			}
+			if (index === 0) {
+				return theme.fg("warning", line);
+			}
+			return line;
+		})
+		.join("\n");
 }
 
 function markFailedTargetLine(line: string, failedTarget: string): string | undefined {
@@ -184,7 +208,7 @@ export function registerApplyPatchTool(pi: ExtensionAPI): void {
 						: "apply_patch failed";
 					const message = failedTarget ? `${prefix} while patching ${failedTarget}: ${error.message}` : `${prefix}: ${error.message}`;
 					if (partial) {
-						setApplyPatchRenderState(toolCallId, typedParams.patchText, ctx.cwd, "partial_failure", failedTarget);
+						markApplyPatchPartialFailure(toolCallId, failedTarget);
 						return {
 							content: [{ type: "text", text: message }],
 							details: {

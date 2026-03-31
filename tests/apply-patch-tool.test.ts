@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { rm, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -211,6 +211,81 @@ test("apply_patch renderCall only marks the exact failed entry inline", async ()
 		assert.match(collapsed, /foo\.txt\.bak \(\+1 -0\)/);
 	} finally {
 		clearApplyPatchRenderState();
+		await rm(cwd, { recursive: true, force: true });
+	}
+});
+
+test("apply_patch renderCall preserves the original preview for partial failures", async () => {
+	const cwd = mkdtempSync(join(tmpdir(), "pi-codex-conversion-"));
+	const { pi, getTool } = createRegisteredTool();
+	registerApplyPatchTool(pi);
+	const theme = createTheme();
+
+	try {
+		writeFileSync(join(cwd, "delete-me.txt"), "first\nsecond\n", "utf8");
+		const patch = `*** Begin Patch
+*** Delete File: delete-me.txt
+*** Update File: missing.txt
+@@
+-old
++new
+*** End Patch`;
+		const tool = getTool();
+		const execute = tool.execute;
+		const renderCall = tool.renderCall;
+		assert.ok(execute);
+		assert.ok(renderCall);
+
+		await execute("call-preview-partial-failure", { input: patch }, undefined, undefined, { cwd });
+
+		const expanded = renderComponentText(
+			renderCall({ input: patch }, theme, { toolCallId: "call-preview-partial-failure", expanded: true, cwd }),
+		);
+
+		assert.match(expanded, /delete-me\.txt \(\+0 -2\)/);
+		assert.match(expanded, /-first/);
+		assert.match(expanded, /-second/);
+		assert.match(expanded, /missing\.txt failed \(\+1 -1\)/);
+	} finally {
+		clearApplyPatchRenderState();
+		await rm(cwd, { recursive: true, force: true });
+	}
+});
+
+test("apply_patch renderCall marks single-file partial failures after warning styling", async () => {
+	const cwd = mkdtempSync(join(tmpdir(), "pi-codex-conversion-"));
+	const lockedDir = join(cwd, "locked");
+	const { pi, getTool } = createRegisteredTool();
+	registerApplyPatchTool(pi);
+	const theme = createTheme();
+
+	try {
+		mkdirSync(lockedDir, { recursive: true });
+		writeFileSync(join(lockedDir, "source.txt"), "from\n", "utf8");
+		chmodSync(lockedDir, 0o555);
+		const patch = `*** Begin Patch
+*** Update File: locked/source.txt
+*** Move to: moved/source.txt
+@@
+-from
++to
+*** End Patch`;
+		const tool = getTool();
+		const execute = tool.execute;
+		const renderCall = tool.renderCall;
+		assert.ok(execute);
+		assert.ok(renderCall);
+
+		await execute("call-single-file-partial-failure", { input: patch }, undefined, undefined, { cwd });
+
+		const collapsed = renderComponentText(
+			renderCall({ input: patch }, theme, { toolCallId: "call-single-file-partial-failure", expanded: false, cwd }),
+		);
+
+		assert.match(collapsed, /^• Edit partially failed locked\/source\.txt → moved\/source\.txt failed \(\+1 -1\)/);
+	} finally {
+		clearApplyPatchRenderState();
+		chmodSync(lockedDir, 0o755);
 		await rm(cwd, { recursive: true, force: true });
 	}
 });
