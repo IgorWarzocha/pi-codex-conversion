@@ -44,6 +44,11 @@ function createRegisteredTool() {
 					theme: ReturnType<typeof createTheme>,
 					context?: { toolCallId?: string; expanded?: boolean; cwd?: string; argsComplete?: boolean },
 				) => { render(width: number): string[] };
+				renderResult?: (
+					result: { content: Array<{ type: string; text?: string }>; details?: unknown },
+					options: { expanded: boolean; isPartial: boolean },
+					theme: ReturnType<typeof createTheme>,
+				) => { render(width: number): string[] };
 		  }
 		| undefined;
 	const pi = {
@@ -82,6 +87,52 @@ test("apply_patch renderCall preserves deleted previews after execution removes 
 		assert.match(rendered, /Deleted delete-me\.txt \(\+0 -2\)/);
 		assert.match(rendered, /-first/);
 		assert.match(rendered, /-second/);
+	} finally {
+		clearApplyPatchRenderState();
+		await rm(cwd, { recursive: true, force: true });
+	}
+});
+
+test("apply_patch renderCall shows partial failure inline after some hunks already applied", async () => {
+	const cwd = mkdtempSync(join(tmpdir(), "pi-codex-conversion-"));
+	const { pi, getTool } = createRegisteredTool();
+	registerApplyPatchTool(pi);
+	const theme = createTheme();
+
+	try {
+		const patch = `*** Begin Patch
+*** Add File: created.txt
++hello
+*** Update File: missing.txt
+@@
+-old
++new
+*** End Patch`;
+		const tool = getTool();
+		const execute = tool.execute;
+		const renderCall = tool.renderCall;
+		assert.ok(execute);
+		assert.ok(renderCall);
+
+		const result = (await execute("call-partial-failure", { input: patch }, undefined, undefined, { cwd })) as {
+			content: Array<{ type: string; text?: string }>;
+			details?: unknown;
+		};
+		assert.equal(result.content[0]?.type, "text");
+		assert.match(result.content[0]?.text ?? "", /partially failed/i);
+
+		const collapsed = renderComponentText(
+			renderCall({ input: patch }, theme, { toolCallId: "call-partial-failure", expanded: false }),
+		);
+		const expanded = renderComponentText(
+			renderCall({ input: patch }, theme, { toolCallId: "call-partial-failure", expanded: true }),
+		);
+
+		assert.match(collapsed, /^• Edit partially failed 2 files \(\+2 -1\)/);
+		assert.match(collapsed, /missing\.txt failed \(\+1 -1\)/);
+		assert.match(expanded, /^• Edit partially failed 2 files \(\+2 -1\)/);
+		assert.match(expanded, /created\.txt \(\+1 -0\)/);
+		assert.match(expanded, /missing\.txt failed \(\+1 -1\)/);
 	} finally {
 		clearApplyPatchRenderState();
 		await rm(cwd, { recursive: true, force: true });

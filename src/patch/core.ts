@@ -2,7 +2,29 @@ import { mkdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { parsePatchActions, parseUpdateFile } from "./parser.ts";
 import { openFileAtPath, pathExists, removeFileAtPath, resolvePatchPath, writeFileAtPath } from "./paths.ts";
-import { DiffError, type ExecutePatchResult, type ParsedPatchAction, type ParserState, type PatchAction } from "./types.ts";
+import { DiffError, ExecutePatchError, type ExecutePatchResult, type ParsedPatchAction, type ParserState, type PatchAction } from "./types.ts";
+
+function buildExecutePatchResult({
+	changedFiles,
+	createdFiles,
+	deletedFiles,
+	movedFiles,
+	fuzz,
+}: {
+	changedFiles: Set<string>;
+	createdFiles: Set<string>;
+	deletedFiles: Set<string>;
+	movedFiles: Set<string>;
+	fuzz: number;
+}): ExecutePatchResult {
+	return {
+		changedFiles: [...changedFiles],
+		createdFiles: [...createdFiles],
+		deletedFiles: [...deletedFiles],
+		movedFiles: [...movedFiles],
+		fuzz,
+	};
+}
 
 function splitFileLines(text: string): string[] {
 	const lines = text.split("\n");
@@ -200,21 +222,36 @@ export function executePatch({ cwd, patchText }: { cwd: string; patchText: strin
 	let fuzz = 0;
 
 	for (const action of actions) {
-		fuzz += applyAction({
-			cwd,
-			action,
-			changedFiles,
-			createdFiles,
-			deletedFiles,
-			movedFiles,
-		});
+		try {
+			fuzz += applyAction({
+				cwd,
+				action,
+				changedFiles,
+				createdFiles,
+				deletedFiles,
+				movedFiles,
+			});
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			throw new ExecutePatchError(
+				message,
+				buildExecutePatchResult({
+					changedFiles,
+					createdFiles,
+					deletedFiles,
+					movedFiles,
+					fuzz,
+				}),
+				action,
+			);
+		}
 	}
 
-	return {
-		changedFiles: [...changedFiles],
-		createdFiles: [...createdFiles],
-		deletedFiles: [...deletedFiles],
-		movedFiles: [...movedFiles],
+	return buildExecutePatchResult({
+		changedFiles,
+		createdFiles,
+		deletedFiles,
+		movedFiles,
 		fuzz,
-	};
+	});
 }

@@ -2,7 +2,7 @@ import { Type } from "@sinclair/typebox";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Container, Text } from "@mariozechner/pi-tui";
 import { executePatch } from "../patch/core.ts";
-import type { ExecutePatchResult } from "../patch/types.ts";
+import { ExecutePatchError, type ExecutePatchResult } from "../patch/types.ts";
 import { formatApplyPatchSummary, renderApplyPatchCall } from "./apply-patch-rendering.ts";
 
 const APPLY_PATCH_PARAMETERS = Type.Object({
@@ -13,9 +13,26 @@ const APPLY_PATCH_PARAMETERS = Type.Object({
 
 interface ApplyPatchRenderState {
 	cwd: string;
+	patchText: string;
 	collapsed: string;
 	expanded: string;
+	status: "pending" | "partial_failure";
+	failedTarget?: string;
 }
+
+interface ApplyPatchSuccessDetails {
+	status: "success";
+	result: ExecutePatchResult;
+}
+
+interface ApplyPatchPartialFailureDetails {
+	status: "partial_failure";
+	result: ExecutePatchResult;
+	error: string;
+	failedTarget?: string;
+}
+
+type ApplyPatchToolDetails = ApplyPatchSuccessDetails | ApplyPatchPartialFailureDetails;
 
 const applyPatchRenderStates = new Map<string, ApplyPatchRenderState>();
 
@@ -33,8 +50,66 @@ function parseApplyPatchParams(params: unknown): { patchText: string } {
 	return { patchText: params.input };
 }
 
-function isExecutePatchResult(details: unknown): details is ExecutePatchResult {
-	return typeof details === "object" && details !== null;
+function isApplyPatchToolDetails(details: unknown): details is ApplyPatchToolDetails {
+	return typeof details === "object" && details !== null && "status" in details && "result" in details;
+}
+
+function setApplyPatchRenderState(
+	toolCallId: string,
+	patchText: string,
+	cwd: string,
+	status: "pending" | "partial_failure" = "pending",
+	failedTarget?: string,
+): void {
+	const collapsed = formatApplyPatchSummary(patchText, cwd);
+	const expanded = renderApplyPatchCall(patchText, cwd);
+	applyPatchRenderStates.set(toolCallId, {
+		cwd,
+		patchText,
+		collapsed,
+		expanded,
+		status,
+		failedTarget,
+	});
+}
+
+function renderPartialFailureCall(
+	text: string,
+	theme: { fg(role: string, text: string): string },
+	failedTarget?: string,
+): string {
+	const lines = text.split("\n");
+	if (lines.length === 0) {
+		return theme.fg("warning", "• Edit partially failed");
+	}
+	lines[0] = lines[0].replace(/^• (Added|Edited|Deleted)\b/, theme.fg("warning", "• Edit partially failed"));
+	if (failedTarget) {
+		for (let i = 0; i < lines.length; i += 1) {
+			if (lines[i].includes(failedTarget)) {
+				lines[i] = theme.fg("error", lines[i].replace(failedTarget, `${failedTarget} failed`));
+			}
+		}
+	}
+	return lines.join("\n");
+}
+
+function summarizePatchCounts(result: ExecutePatchResult): string {
+	return [
+		`changed ${result.changedFiles.length} file${result.changedFiles.length === 1 ? "" : "s"}`,
+		`created ${result.createdFiles.length}`,
+		`deleted ${result.deletedFiles.length}`,
+		`moved ${result.movedFiles.length}`,
+	].join(", ");
+}
+
+function describeFailedAction(error: ExecutePatchError): string | undefined {
+	if (!error.failedAction) {
+		return undefined;
+	}
+	if (error.failedAction.type === "update" && error.failedAction.movePath) {
+		return `${error.failedAction.path} → ${error.failedAction.movePath}`;
+	}
+	return error.failedAction.path;
 }
 
 export type { ExecutePatchResult } from "../patch/types.ts";
@@ -57,7 +132,11 @@ const renderApplyPatchCallWithOptionalContext: any = (
 	}
 	const cached = context?.toolCallId ? applyPatchRenderStates.get(context.toolCallId) : undefined;
 	const cwd = context?.cwd ?? cached?.cwd;
-	const text = context?.expanded ? cached?.expanded ?? renderApplyPatchCall(patchText, cwd) : cached?.collapsed ?? formatApplyPatchSummary(patchText, cwd);
+	const effectivePatchText = cached?.patchText ?? patchText;
+	const baseText = context?.expanded
+		? cached?.expanded ?? renderApplyPatchCall(effectivePatchText, cwd)
+		: cached?.collapsed ?? formatApplyPatchSummary(effectivePatchText, cwd);
+	const text = cached?.status === "partial_failure" ? renderPartialFailureCall(baseText, theme, cached.failedTarget) : baseText;
 	return new Text(text, 0, 0);
 };
 
@@ -75,12 +154,34 @@ export function registerApplyPatchTool(pi: ExtensionAPI): void {
 			}
 
 			const typedParams = parseApplyPatchParams(params);
-			applyPatchRenderStates.set(toolCallId, {
-				cwd: ctx.cwd,
-				collapsed: formatApplyPatchSummary(typedParams.patchText, ctx.cwd),
-				expanded: renderApplyPatchCall(typedParams.patchText, ctx.cwd),
-			});
-			const result = executePatch({ cwd: ctx.cwd, patchText: typedParams.patchText });
+			setApplyPatchRenderState(toolCallId, typedParams.patchText, ctx.cwd);
+			let result: ExecutePatchResult;
+			try {
+				result = executePatch({ cwd: ctx.cwd, patchText: typedParams.patchText });
+			} catch (error) {
+				if (error instanceof ExecutePatchError) {
+					const partial = error.hasPartialSuccess();
+					const failedTarget = describeFailedAction(error);
+					const prefix = partial
+						? `apply_patch partially failed after ${summarizePatchCounts(error.result)}`
+						: "apply_patch failed";
+					const message = failedTarget ? `${prefix} while patching ${failedTarget}: ${error.message}` : `${prefix}: ${error.message}`;
+					if (partial) {
+						setApplyPatchRenderState(toolCallId, typedParams.patchText, ctx.cwd, "partial_failure", failedTarget);
+						return {
+							content: [{ type: "text", text: message }],
+							details: {
+								status: "partial_failure",
+								result: error.result,
+								error: message,
+								failedTarget,
+							} satisfies ApplyPatchPartialFailureDetails,
+						};
+					}
+					throw new Error(message);
+				}
+				throw error;
+			}
 			const summary = [
 				"Applied patch successfully.",
 				`Changed files: ${result.changedFiles.length}`,
@@ -92,16 +193,23 @@ export function registerApplyPatchTool(pi: ExtensionAPI): void {
 
 			return {
 				content: [{ type: "text", text: summary }],
-				details: result,
+				details: {
+					status: "success",
+					result,
+				} satisfies ApplyPatchSuccessDetails,
 			};
 		},
 		renderCall: renderApplyPatchCallWithOptionalContext,
-		renderResult(result, { isPartial }, theme) {
+		renderResult(result, { isPartial, expanded }, theme) {
 			if (isPartial) {
 				return new Text(`${theme.fg("dim", "•")} ${theme.bold("Patching")}`, 0, 0);
 			}
 
-			if (!isExecutePatchResult(result.details)) {
+			if (!isApplyPatchToolDetails(result.details)) {
+				return new Container();
+			}
+
+			if (result.details.status === "partial_failure") {
 				return new Container();
 			}
 
