@@ -9,6 +9,7 @@ const CODEX_GUIDELINES = [
 	"When multiple tool calls are independent, emit them together so they can execute in parallel instead of serializing them.",
 	"Use `parallel` only when tool calls are independent and can safely run at the same time.",
 	"Use `write_stdin` when an exec session returns `session_id`, and continue until `exit_code` is present.",
+	"When polling a running exec session with empty `chars`, wait meaningfully between polls and do not repeatedly poll by reflex.",
 	"Do not request `tty` unless interactive terminal behavior is required.",
 ];
 

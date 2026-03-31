@@ -5,6 +5,10 @@ import { createExecSessionManager } from "../src/tools/exec-session-manager.ts";
 import { formatUnifiedExecResult } from "../src/tools/unified-exec-format.ts";
 import { registerWriteStdinTool } from "../src/tools/write-stdin-tool.ts";
 
+function createFastTestExecSessionManager() {
+	return createExecSessionManager({ minEmptyWriteYieldTimeMs: 50 });
+}
+
 function createTheme() {
 	return {
 		fg: (_role: string, text: string) => text,
@@ -45,7 +49,7 @@ function createRegisteredTool() {
 }
 
 test("write_stdin renderCall stays stable after the backing session exits", async () => {
-	const sessions = createExecSessionManager();
+	const sessions = createFastTestExecSessionManager();
 	const { pi, getTool } = createRegisteredTool();
 	registerWriteStdinTool(pi, sessions);
 	const theme = createTheme();
@@ -82,8 +86,26 @@ test("write_stdin renderCall stays stable after the backing session exits", asyn
 	}
 });
 
+test("write_stdin renderResult returns an empty component for collapsed or partial states", () => {
+	const sessions = createFastTestExecSessionManager();
+	const { pi, getTool } = createRegisteredTool();
+	registerWriteStdinTool(pi, sessions);
+	const theme = createTheme();
+
+	try {
+		const result = {
+			content: [{ type: "text", text: "ignored" }],
+		};
+
+		assert.equal(renderComponentText(getTool().renderResult?.(result, { expanded: false, isPartial: false }, theme)), "");
+		assert.equal(renderComponentText(getTool().renderResult?.(result, { expanded: true, isPartial: true }, theme)), "");
+	} finally {
+		sessions.shutdown();
+	}
+});
+
 test("write_stdin renderResult falls back to the Output section of formatted transcripts when details are unavailable", () => {
-	const sessions = createExecSessionManager();
+	const sessions = createFastTestExecSessionManager();
 	const { pi, getTool } = createRegisteredTool();
 	registerWriteStdinTool(pi, sessions);
 	const theme = createTheme();
@@ -115,7 +137,7 @@ test("write_stdin renderResult falls back to the Output section of formatted tra
 });
 
 test("write_stdin renderResult falls back to running-session state from formatted transcripts", () => {
-	const sessions = createExecSessionManager();
+	const sessions = createFastTestExecSessionManager();
 	const { pi, getTool } = createRegisteredTool();
 	registerWriteStdinTool(pi, sessions);
 	const theme = createTheme();
@@ -141,37 +163,6 @@ test("write_stdin renderResult falls back to running-session state from formatte
 		);
 
 		assert.equal(rendered, "ready\nSession 7 still running");
-	} finally {
-		sessions.shutdown();
-	}
-});
-
-test("write_stdin renderResult returns an empty component for collapsed or partial states", () => {
-	const sessions = createExecSessionManager();
-	const { pi, getTool } = createRegisteredTool();
-	registerWriteStdinTool(pi, sessions);
-	const theme = createTheme();
-
-	try {
-		const collapsed = getTool().renderResult?.(
-			{
-				content: [{ type: "text", text: "ignored" }],
-			},
-			{ expanded: false, isPartial: false },
-			theme,
-		);
-		assert.ok(collapsed);
-		assert.deepEqual(collapsed.render(120), []);
-
-		const partial = getTool().renderResult?.(
-			{
-				content: [{ type: "text", text: "ignored" }],
-			},
-			{ expanded: true, isPartial: true },
-			theme,
-		);
-		assert.ok(partial);
-		assert.deepEqual(partial.render(120), []);
 	} finally {
 		sessions.shutdown();
 	}

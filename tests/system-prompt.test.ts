@@ -54,6 +54,7 @@ test("buildCodexSystemPrompt preserves Pi-composed sections and adds a narrow Co
 	assert.match(prompt, /- When multiple tool calls are independent, emit them together so they can execute in parallel instead of serializing them\./);
 	assert.match(prompt, /- Use `parallel` only when tool calls are independent and can safely run at the same time\./);
 	assert.match(prompt, /- Use `write_stdin` when an exec session returns `session_id`, and continue until `exit_code` is present\./);
+	assert.match(prompt, /- When polling a running exec session with empty `chars`, wait meaningfully between polls and do not repeatedly poll by reflex\./);
 	assert.match(prompt, /- Do not request `tty` unless interactive terminal behavior is required\./);
 });
 
