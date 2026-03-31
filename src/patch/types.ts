@@ -42,3 +42,25 @@ export class DiffError extends Error {
 		this.name = "DiffError";
 	}
 }
+
+export class ExecutePatchError extends DiffError {
+	result: ExecutePatchResult;
+	failedAction?: ParsedPatchAction;
+
+	constructor(message: string, result: ExecutePatchResult, failedAction?: ParsedPatchAction) {
+		super(message);
+		this.name = "ExecutePatchError";
+		this.result = result;
+		this.failedAction = failedAction;
+	}
+
+	hasPartialSuccess(): boolean {
+		return (
+			this.result.changedFiles.length > 0 ||
+			this.result.createdFiles.length > 0 ||
+			this.result.deletedFiles.length > 0 ||
+			this.result.movedFiles.length > 0 ||
+			this.result.fuzz > 0
+		);
+	}
+}

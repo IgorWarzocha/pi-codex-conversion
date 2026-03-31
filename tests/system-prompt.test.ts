@@ -51,6 +51,7 @@ test("buildCodexSystemPrompt preserves Pi-composed sections and adds a narrow Co
 	assert.match(prompt, /^Current date: 2026-03-14$/m);
 	assert.match(prompt, /^Current working directory: \/tmp\/example-workspace$/m);
 	assert.match(prompt, /- Prefer a single `apply_patch` call that updates all related files together when one coherent patch will do\./);
+	assert.match(prompt, /- When making coordinated edits across multiple files, include them in one `apply_patch` call instead of splitting them into separate patches\./);
 	assert.match(prompt, /- When multiple tool calls are independent, emit them together so they can execute in parallel instead of serializing them\./);
 	assert.match(prompt, /- Use `parallel` only when tool calls are independent and can safely run at the same time\./);
 	assert.match(prompt, /- Use `write_stdin` when an exec session returns `session_id`, and continue until `exit_code` is present\./);

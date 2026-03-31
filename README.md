@@ -61,6 +61,7 @@ npm run check
 - `view_image({ path: "/absolute/path/to/screenshot.png" })` is available on image-capable models
 - `web_search` is surfaced only on `openai-codex`, and the adapter rewrites it into the native OpenAI Responses `type: "web_search"` payload instead of executing a local function tool
 - when native web search is available, the adapter shows a one-time session notice; individual searches are not surfaced because Pi does not expose native web-search execution events to extensions
+- `apply_patch` partial failures stay inline in the patch row so successful and failed file entries can be seen together
 
 Raw command output is still available by expanding the tool result.
 
@@ -137,6 +138,7 @@ That keeps the prompt much closer to `pi-mono` while still steering the model to
 - `view_image` resolves paths against the active session cwd and only exposes `detail: "original"` for Codex-family image-capable models.
 - `web_search` is exposed only for the `openai-codex` provider and is forwarded as the native OpenAI Codex Responses web search tool.
 - `apply_patch` paths stay restricted to the current working directory.
+- partial `apply_patch` failures stay in the original patch block and highlight the failed entry instead of adding a second warning row.
 - `exec_command` / `write_stdin` use a custom PTY-backed session manager via `node-pty` for interactive sessions.
 - tiny `exec_command` waits are clamped for non-interactive commands so short runs do not burn an avoidable follow-up tool call.
 - empty `write_stdin` polls are clamped to a meaningful minimum wait so long-running processes are not repolled too aggressively.

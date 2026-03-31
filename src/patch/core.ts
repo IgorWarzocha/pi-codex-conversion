@@ -1,8 +1,36 @@
-import { mkdirSync, unlinkSync, writeFileSync } from "node:fs";
+import * as fs from "node:fs";
 import { dirname } from "node:path";
 import { parsePatchActions, parseUpdateFile } from "./parser.ts";
 import { openFileAtPath, pathExists, removeFileAtPath, resolvePatchPath, writeFileAtPath } from "./paths.ts";
-import { DiffError, type ExecutePatchResult, type ParsedPatchAction, type ParserState, type PatchAction } from "./types.ts";
+import { DiffError, ExecutePatchError, type ExecutePatchResult, type ParsedPatchAction, type ParserState, type PatchAction } from "./types.ts";
+
+export const patchFsOps = {
+	mkdirSync: fs.mkdirSync,
+	writeFileSync: fs.writeFileSync,
+	unlinkSync: fs.unlinkSync,
+};
+
+function buildExecutePatchResult({
+	changedFiles,
+	createdFiles,
+	deletedFiles,
+	movedFiles,
+	fuzz,
+}: {
+	changedFiles: Set<string>;
+	createdFiles: Set<string>;
+	deletedFiles: Set<string>;
+	movedFiles: Set<string>;
+	fuzz: number;
+}): ExecutePatchResult {
+	return {
+		changedFiles: [...changedFiles],
+		createdFiles: [...createdFiles],
+		deletedFiles: [...deletedFiles],
+		movedFiles: [...movedFiles],
+		fuzz,
+	};
+}
 
 function splitFileLines(text: string): string[] {
 	const lines = text.split("\n");
@@ -103,21 +131,23 @@ function applyMove({
 	const toAbsolutePath = resolvePatchPath({ cwd, patchPath: movePath });
 	const destinationExisted = pathExists({ cwd, path: movePath });
 
-	mkdirSync(dirname(toAbsolutePath), { recursive: true });
-	writeFileSync(toAbsolutePath, content, "utf8");
-	if (fromAbsolutePath !== toAbsolutePath) {
-		unlinkSync(fromAbsolutePath);
-	}
-
-	changedFiles.add(path);
+	patchFsOps.mkdirSync(dirname(toAbsolutePath), { recursive: true });
+	patchFsOps.writeFileSync(toAbsolutePath, content, "utf8");
 	changedFiles.add(movePath);
-	movedFiles.add(`${path} -> ${movePath}`);
 	if (!destinationExisted) {
 		createdFiles.add(movePath);
 	}
+
 	if (fromAbsolutePath !== toAbsolutePath) {
+		patchFsOps.unlinkSync(fromAbsolutePath);
+		changedFiles.add(path);
+		movedFiles.add(`${path} -> ${movePath}`);
 		deletedFiles.add(path);
+		return;
 	}
+
+	changedFiles.add(path);
+	movedFiles.add(`${path} -> ${movePath}`);
 }
 
 function applyAction({
@@ -200,21 +230,36 @@ export function executePatch({ cwd, patchText }: { cwd: string; patchText: strin
 	let fuzz = 0;
 
 	for (const action of actions) {
-		fuzz += applyAction({
-			cwd,
-			action,
-			changedFiles,
-			createdFiles,
-			deletedFiles,
-			movedFiles,
-		});
+		try {
+			fuzz += applyAction({
+				cwd,
+				action,
+				changedFiles,
+				createdFiles,
+				deletedFiles,
+				movedFiles,
+			});
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			throw new ExecutePatchError(
+				message,
+				buildExecutePatchResult({
+					changedFiles,
+					createdFiles,
+					deletedFiles,
+					movedFiles,
+					fuzz,
+				}),
+				action,
+			);
+		}
 	}
 
-	return {
-		changedFiles: [...changedFiles],
-		createdFiles: [...createdFiles],
-		deletedFiles: [...deletedFiles],
-		movedFiles: [...movedFiles],
+	return buildExecutePatchResult({
+		changedFiles,
+		createdFiles,
+		deletedFiles,
+		movedFiles,
 		fuzz,
-	};
+	});
 }

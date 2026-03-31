@@ -4,7 +4,8 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { executePatch } from "../src/patch/core.ts";
+import { executePatch, patchFsOps } from "../src/patch/core.ts";
+import { ExecutePatchError } from "../src/patch/types.ts";
 
 test("executePatch updates, adds, and moves files inside cwd", async () => {
 	const cwd = mkdtempSync(join(tmpdir(), "pi-codex-conversion-"));
@@ -166,11 +167,11 @@ test("executePatch update appends a trailing newline", async () => {
 test("executePatch leaves earlier changes applied when a later hunk fails", async () => {
 	const cwd = mkdtempSync(join(tmpdir(), "pi-codex-conversion-"));
 	try {
-		assert.throws(
-			() =>
-				executePatch({
-					cwd,
-					patchText: `*** Begin Patch
+		let error: unknown;
+		try {
+			executePatch({
+				cwd,
+				patchText: `*** Begin Patch
 *** Add File: created.txt
 +hello
 *** Update File: missing.txt
@@ -178,11 +179,61 @@ test("executePatch leaves earlier changes applied when a later hunk fails", asyn
 -old
 +new
 *** End Patch`,
-				}),
-			/file not found|missing file/i,
-		);
+			});
+		} catch (caught) {
+			error = caught;
+		}
+
+		assert.ok(error instanceof ExecutePatchError);
+		assert.match(error.message, /file not found|missing file/i);
+		assert.deepEqual(error.result.changedFiles, ["created.txt"]);
+		assert.deepEqual(error.result.createdFiles, ["created.txt"]);
+		assert.equal(error.failedAction?.path, "missing.txt");
 
 		assert.equal(readFileSync(join(cwd, "created.txt"), "utf8"), "hello\n");
+	} finally {
+		await rm(cwd, { recursive: true, force: true });
+	}
+});
+
+test("executePatch reports partial move side effects when unlink fails after writing the destination", async () => {
+	const cwd = mkdtempSync(join(tmpdir(), "pi-codex-conversion-"));
+	const sourcePath = join(cwd, "source.txt");
+	const originalUnlinkSync = patchFsOps.unlinkSync;
+	try {
+		writeFileSync(sourcePath, "from\n", "utf8");
+		patchFsOps.unlinkSync = (path) => {
+			if (String(path) === sourcePath) {
+				throw new Error("mock unlink failure");
+			}
+			return originalUnlinkSync(path);
+		};
+
+		let error: unknown;
+		try {
+			executePatch({
+				cwd,
+				patchText: `*** Begin Patch
+*** Update File: source.txt
+*** Move to: moved/source.txt
+@@
+-from
++to
+*** End Patch`,
+			});
+		} catch (caught) {
+			error = caught;
+		} finally {
+			patchFsOps.unlinkSync = originalUnlinkSync;
+		}
+
+		assert.ok(error instanceof ExecutePatchError);
+		assert.deepEqual(error.result.changedFiles, ["moved/source.txt"]);
+		assert.deepEqual(error.result.createdFiles, ["moved/source.txt"]);
+		assert.deepEqual(error.result.deletedFiles, []);
+		assert.deepEqual(error.result.movedFiles, []);
+		assert.equal(readFileSync(join(cwd, "moved/source.txt"), "utf8"), "to\n");
+		assert.equal(readFileSync(sourcePath, "utf8"), "from\n");
 	} finally {
 		await rm(cwd, { recursive: true, force: true });
 	}
