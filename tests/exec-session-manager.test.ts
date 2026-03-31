@@ -2,6 +2,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createExecSessionManager, type UnifiedExecResult } from "../src/tools/exec-session-manager.ts";
 
+function createFastTestExecSessionManager() {
+	return createExecSessionManager({ minEmptyWriteYieldTimeMs: 50 });
+}
+
 async function finishSession(
 	sessionId: number,
 	write: (chars?: string) => Promise<UnifiedExecResult>,
@@ -16,7 +20,7 @@ async function finishSession(
 }
 
 test("exec session manager supports long-running commands via write_stdin", async () => {
-	const sessions = createExecSessionManager();
+	const sessions = createFastTestExecSessionManager();
 	try {
 		const started = await sessions.exec(
 			{
@@ -50,7 +54,7 @@ test("exec session manager supports long-running commands via write_stdin", asyn
 });
 
 test("exec_command returns completed for short-lived commands that print before exiting", async () => {
-	const sessions = createExecSessionManager();
+	const sessions = createFastTestExecSessionManager();
 	try {
 		const result = await sessions.exec(
 			{
@@ -73,7 +77,7 @@ test("exec_command returns completed for short-lived commands that print before 
 test("exec session manager coerces fish defaults to bash", async () => {
 	const originalShell = process.env.SHELL;
 	process.env.SHELL = "/usr/bin/fish";
-	const sessions = createExecSessionManager();
+	const sessions = createFastTestExecSessionManager();
 	try {
 		const result = await sessions.exec(
 			{
@@ -97,7 +101,7 @@ test("exec session manager coerces fish defaults to bash", async () => {
 });
 
 test("exec session manager coerces explicit fish shells to bash", async () => {
-	const sessions = createExecSessionManager();
+	const sessions = createFastTestExecSessionManager();
 	try {
 		const result = await sessions.exec(
 			{
@@ -121,7 +125,7 @@ test("exec session manager preserves fish-derived PATH and SHELL when forcing ba
 	const originalPath = process.env.PATH;
 	process.env.SHELL = "/usr/bin/fish";
 	process.env.PATH = "/tmp/pi-codex-fish-path:/usr/bin:/bin";
-	const sessions = createExecSessionManager();
+	const sessions = createFastTestExecSessionManager();
 	try {
 		const result = await sessions.exec(
 			{
@@ -149,7 +153,7 @@ test("exec session manager preserves fish-derived PATH and SHELL when forcing ba
 });
 
 test("write_stdin returns completed when interactive input causes a quick exit", async () => {
-	const sessions = createExecSessionManager();
+	const sessions = createFastTestExecSessionManager();
 	try {
 		const started = await sessions.exec(
 			{
@@ -178,8 +182,69 @@ test("write_stdin returns completed when interactive input causes a quick exit",
 	}
 });
 
+test("empty write_stdin polls are clamped to the configured minimum", async () => {
+	const sessions = createExecSessionManager({ minEmptyWriteYieldTimeMs: 500 });
+	try {
+		const started = await sessions.exec(
+			{
+				cmd: "sleep 2",
+				shell: "/bin/bash",
+				login: false,
+				yield_time_ms: 50,
+			},
+			process.cwd(),
+		);
+
+		assert.equal(typeof started.session_id, "number");
+
+		const start = Date.now();
+		const resumed = await sessions.write({
+			session_id: started.session_id!,
+			yield_time_ms: 50,
+		});
+		const elapsed = Date.now() - start;
+
+		assert.ok(elapsed >= 450, `expected empty poll clamp >= 450ms, got ${elapsed}ms`);
+		assert.equal(resumed.session_id, started.session_id);
+	} finally {
+		sessions.shutdown();
+	}
+});
+
+test("non-empty write_stdin calls stay responsive and do not use the empty-poll minimum", async () => {
+	const sessions = createExecSessionManager({ minEmptyWriteYieldTimeMs: 500 });
+	try {
+		const started = await sessions.exec(
+			{
+				cmd: "read line && sleep 0.1 && printf ':%s' \"$line\"",
+				shell: "/bin/bash",
+				login: false,
+				tty: true,
+				yield_time_ms: 50,
+			},
+			process.cwd(),
+		);
+
+		assert.equal(typeof started.session_id, "number");
+
+		const start = Date.now();
+		const resumed = await sessions.write({
+			session_id: started.session_id!,
+			chars: "hello\n",
+			yield_time_ms: 50,
+		});
+		const elapsed = Date.now() - start;
+
+		assert.ok(elapsed < 450, `expected non-empty write to stay responsive, got ${elapsed}ms`);
+		assert.equal(resumed.exit_code, 0);
+		assert.equal(resumed.output, "hello\n:hello");
+	} finally {
+		sessions.shutdown();
+	}
+});
+
 test("write_stdin rejects interactive input for non-tty sessions", async () => {
-	const sessions = createExecSessionManager();
+	const sessions = createFastTestExecSessionManager();
 	try {
 		const started = await sessions.exec(
 			{
@@ -207,7 +272,7 @@ test("write_stdin rejects interactive input for non-tty sessions", async () => {
 });
 
 test("write_stdin rejects missing sessions", async () => {
-	const sessions = createExecSessionManager();
+	const sessions = createFastTestExecSessionManager();
 	try {
 		await assert.rejects(() => sessions.write({ session_id: 99999 }), /Unknown process id 99999/);
 	} finally {
@@ -216,7 +281,7 @@ test("write_stdin rejects missing sessions", async () => {
 });
 
 test("exec session manager strips terminal control noise from PTY output", async () => {
-	const sessions = createExecSessionManager();
+	const sessions = createFastTestExecSessionManager();
 	try {
 		let result = await sessions.exec(
 			{
@@ -244,7 +309,7 @@ test("exec session manager strips terminal control noise from PTY output", async
 });
 
 test("exec session manager strips non-CSI escape sequences from PTY output", async () => {
-	const sessions = createExecSessionManager();
+	const sessions = createFastTestExecSessionManager();
 	try {
 		let result = await sessions.exec(
 			{
@@ -272,7 +337,7 @@ test("exec session manager strips non-CSI escape sequences from PTY output", asy
 });
 
 test("exec session manager applies basic PTY cursor semantics for carriage returns and backspaces", async () => {
-	const sessions = createExecSessionManager();
+	const sessions = createFastTestExecSessionManager();
 	try {
 		let result = await sessions.exec(
 			{
@@ -300,7 +365,7 @@ test("exec session manager applies basic PTY cursor semantics for carriage retur
 });
 
 test("exec session manager replays PTY line rewrites correctly across multiple polls", async () => {
-	const sessions = createExecSessionManager();
+	const sessions = createFastTestExecSessionManager();
 	try {
 		let result = await sessions.exec(
 			{

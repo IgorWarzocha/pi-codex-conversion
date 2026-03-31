@@ -65,10 +65,17 @@ export interface ExecSessionManager {
 	shutdown(): void;
 }
 
+export interface ExecSessionManagerOptions {
+	defaultExecYieldTimeMs?: number;
+	defaultWriteYieldTimeMs?: number;
+	minEmptyWriteYieldTimeMs?: number;
+}
+
 const DEFAULT_EXEC_YIELD_TIME_MS = 10_000;
-const DEFAULT_WRITE_YIELD_TIME_MS = 10_000;
+const DEFAULT_WRITE_YIELD_TIME_MS = 250;
 const DEFAULT_MAX_OUTPUT_TOKENS = 10_000;
 const MIN_YIELD_TIME_MS = 250;
+const MIN_EMPTY_WRITE_YIELD_TIME_MS = 5_000;
 const MAX_YIELD_TIME_MS = 30_000;
 const MAX_COMMAND_HISTORY = 256;
 
@@ -137,6 +144,19 @@ function resolveExecution(requestedShell: string | undefined, command: string): 
 function clampYieldTime(yieldTimeMs: number | undefined, fallback: number): number {
 	const value = yieldTimeMs ?? fallback;
 	return Math.min(MAX_YIELD_TIME_MS, Math.max(MIN_YIELD_TIME_MS, value));
+}
+
+function clampWriteYieldTime(
+	yieldTimeMs: number | undefined,
+	fallback: number,
+	isEmptyPoll: boolean,
+	minEmptyWriteYieldTimeMs: number,
+): number {
+	const value = clampYieldTime(yieldTimeMs, fallback);
+	if (!isEmptyPoll) {
+		return value;
+	}
+	return Math.min(MAX_YIELD_TIME_MS, Math.max(minEmptyWriteYieldTimeMs, value));
 }
 
 function maxCharsForTokens(maxOutputTokens = DEFAULT_MAX_OUTPUT_TOKENS): number {
@@ -309,11 +329,17 @@ function registerAbortHandler(signal: AbortSignal | undefined, onAbort: () => vo
 	return () => signal.removeEventListener("abort", abortListener);
 }
 
-export function createExecSessionManager(): ExecSessionManager {
+export function createExecSessionManager(options: ExecSessionManagerOptions = {}): ExecSessionManager {
 	let nextSessionId = 1;
 	const sessions = new Map<number, ExecSession>();
 	const commandHistory = new Map<number, string>();
 	const exitListeners = new Set<(sessionId: number, command: string) => void>();
+	const defaultExecYieldTimeMs = options.defaultExecYieldTimeMs ?? DEFAULT_EXEC_YIELD_TIME_MS;
+	const defaultWriteYieldTimeMs = options.defaultWriteYieldTimeMs ?? DEFAULT_WRITE_YIELD_TIME_MS;
+	const minEmptyWriteYieldTimeMs = Math.min(
+		MAX_YIELD_TIME_MS,
+		Math.max(MIN_YIELD_TIME_MS, options.minEmptyWriteYieldTimeMs ?? MIN_EMPTY_WRITE_YIELD_TIME_MS),
+	);
 
 	function rememberCommand(sessionId: number, command: string): void {
 		commandHistory.set(sessionId, command);
@@ -494,7 +520,7 @@ export function createExecSessionManager(): ExecSessionManager {
 			sessions.set(session.id, session);
 			rememberCommand(session.id, session.command);
 
-			const waitedMs = await waitForExitOrTimeout(session, clampYieldTime(input.yield_time_ms, DEFAULT_EXEC_YIELD_TIME_MS));
+			const waitedMs = await waitForExitOrTimeout(session, clampYieldTime(input.yield_time_ms, defaultExecYieldTimeMs));
 			return makeResult(session, waitedMs, input.max_output_tokens);
 		},
 		write: async (input) => {
@@ -512,7 +538,15 @@ export function createExecSessionManager(): ExecSessionManager {
 			}
 			const waitedMs =
 				session.exitCode === undefined
-					? await waitForExitOrTimeout(session, clampYieldTime(input.yield_time_ms, DEFAULT_WRITE_YIELD_TIME_MS))
+					? await waitForExitOrTimeout(
+							session,
+							clampWriteYieldTime(
+								input.yield_time_ms,
+								defaultWriteYieldTimeMs,
+								!input.chars || input.chars.length === 0,
+								minEmptyWriteYieldTimeMs,
+							),
+						)
 					: 0;
 			return makeResult(session, waitedMs, input.max_output_tokens);
 		},
