@@ -143,7 +143,10 @@ export function registerApplyPatchTool(pi: ExtensionAPI): void {
 		label: "apply_patch",
 		description: "Use `apply_patch` to edit files. Send the full patch in `input`.",
 		promptSnippet: "Edit files with a patch.",
-		promptGuidelines: ["Prefer apply_patch for focused textual edits instead of rewriting whole files."],
+		promptGuidelines: [
+			"Prefer apply_patch for focused textual edits instead of rewriting whole files.",
+			"When one task needs coordinated edits across multiple files, send them in a single apply_patch call when one coherent patch will do.",
+		],
 		parameters: APPLY_PATCH_PARAMETERS,
 		async execute(toolCallId, params, signal, _onUpdate, ctx) {
 			if (signal?.aborted) {
