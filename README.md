@@ -55,7 +55,7 @@ npm run check
 - `rg --files src | head -n 50` -> `Explored / List src`
 - `cat README.md` -> `Explored / Read README.md`
 - `exec_command({ cmd: "npm test", yield_time_ms: 1000 })` may return `session_id`, then continue with `write_stdin`
-- `write_stdin({ session_id, chars: "" })` renders like `Waited for background terminal`
+- `write_stdin({ session_id, chars: "" })` renders like `Waited for background terminal` and is meant for occasional polling, not tight repoll loops
 - `write_stdin({ session_id, chars: "y\\n" })` renders like `Interacted with background terminal`
 - `view_image({ path: "/absolute/path/to/screenshot.png" })` is available on image-capable models
 - `web_search` is surfaced only on `openai-codex`, and the adapter rewrites it into the native OpenAI Responses `type: "web_search"` payload instead of executing a local function tool
@@ -137,6 +137,7 @@ That keeps the prompt much closer to `pi-mono` while still steering the model to
 - `web_search` is exposed only for the `openai-codex` provider and is forwarded as the native OpenAI Codex Responses web search tool.
 - `apply_patch` paths stay restricted to the current working directory.
 - `exec_command` / `write_stdin` use a custom PTY-backed session manager via `node-pty` for interactive sessions.
+- empty `write_stdin` polls are clamped to a meaningful minimum wait so long-running processes are not repolled too aggressively.
 - PTY output handling applies basic terminal rewrite semantics (`\r`, `\b`, erase-in-line, and common escape cleanup) so interactive redraws replay sensibly.
 - Skills inventory is reintroduced in a Codex-style section when Pi's composed prompt already exposed the underlying Pi skills inventory.
 
