@@ -56,6 +56,10 @@ function isUnifiedExecResult(details: unknown): details is UnifiedExecResult {
 	return typeof details === "object" && details !== null;
 }
 
+function createEmptyToolResult(): Text {
+	return new Text("", 0, 0);
+}
+
 export function registerExecCommandTool(pi: ExtensionAPI, tracker: ExecCommandTracker, sessions: ExecSessionManager): void {
 	pi.registerTool({
 		name: "exec_command",
@@ -88,7 +92,7 @@ export function registerExecCommandTool(pi: ExtensionAPI, tracker: ExecCommandTr
 		},
 		renderResult(result, { expanded, isPartial }, theme) {
 			if (isPartial || !expanded) {
-				return undefined;
+				return createEmptyToolResult();
 			}
 
 			const details = isUnifiedExecResult(result.details) ? result.details : undefined;

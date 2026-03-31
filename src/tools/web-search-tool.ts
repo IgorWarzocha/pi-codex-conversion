@@ -113,7 +113,7 @@ export function createWebSearchTool(): ToolDefinition<typeof WEB_SEARCH_PARAMETE
 		},
 		renderResult(result, { expanded }, theme) {
 			if (!expanded) {
-				return undefined;
+				return new Text("", 0, 0);
 			}
 			const textBlock = result.content.find((item) => item.type === "text");
 			const text = textBlock?.type === "text" ? textBlock.text : "(no output)";

@@ -100,6 +100,10 @@ function isUnifiedExecResult(details: unknown): details is UnifiedExecResult {
 	return typeof details === "object" && details !== null;
 }
 
+function createEmptyToolResult(): Text {
+	return new Text("", 0, 0);
+}
+
 export function registerWriteStdinTool(pi: ExtensionAPI, sessions: ExecSessionManager): void {
 	pi.registerTool({
 		name: "write_stdin",
@@ -129,7 +133,7 @@ export function registerWriteStdinTool(pi: ExtensionAPI, sessions: ExecSessionMa
 			return new Text(renderWriteStdinCall(sessionId, input, command, theme), 0, 0);
 		},
 		renderResult(result, { expanded, isPartial }, theme) {
-			if (isPartial || !expanded) return undefined;
+			if (isPartial || !expanded) return createEmptyToolResult();
 			const state = getResultState(result);
 			const output = renderTerminalText(state.output);
 			let text = theme.fg("dim", output || "(no output)");

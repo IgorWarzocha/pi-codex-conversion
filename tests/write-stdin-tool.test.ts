@@ -82,6 +82,24 @@ test("write_stdin renderCall stays stable after the backing session exits", asyn
 	}
 });
 
+test("write_stdin renderResult returns an empty component for collapsed or partial states", () => {
+	const sessions = createExecSessionManager();
+	const { pi, getTool } = createRegisteredTool();
+	registerWriteStdinTool(pi, sessions);
+	const theme = createTheme();
+
+	try {
+		const result = {
+			content: [{ type: "text", text: "ignored" }],
+		};
+
+		assert.equal(renderComponentText(getTool().renderResult?.(result, { expanded: false, isPartial: false }, theme)), "");
+		assert.equal(renderComponentText(getTool().renderResult?.(result, { expanded: true, isPartial: true }, theme)), "");
+	} finally {
+		sessions.shutdown();
+	}
+});
+
 test("write_stdin renderResult falls back to the Output section of formatted transcripts when details are unavailable", () => {
 	const sessions = createExecSessionManager();
 	const { pi, getTool } = createRegisteredTool();
