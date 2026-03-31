@@ -3,7 +3,7 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Container, Text } from "@mariozechner/pi-tui";
 import { executePatch } from "../patch/core.ts";
 import { ExecutePatchError, type ExecutePatchResult } from "../patch/types.ts";
-import { formatApplyPatchSummary, renderApplyPatchCall } from "./apply-patch-rendering.ts";
+import { formatApplyPatchSummary, formatPatchTarget, renderApplyPatchCall } from "./apply-patch-rendering.ts";
 
 const APPLY_PATCH_PARAMETERS = Type.Object({
 	input: Type.String({
@@ -102,14 +102,11 @@ function summarizePatchCounts(result: ExecutePatchResult): string {
 	].join(", ");
 }
 
-function describeFailedAction(error: ExecutePatchError): string | undefined {
+function describeFailedAction(error: ExecutePatchError, cwd: string): string | undefined {
 	if (!error.failedAction) {
 		return undefined;
 	}
-	if (error.failedAction.type === "update" && error.failedAction.movePath) {
-		return `${error.failedAction.path} → ${error.failedAction.movePath}`;
-	}
-	return error.failedAction.path;
+	return formatPatchTarget(error.failedAction.path, error.failedAction.type === "update" ? error.failedAction.movePath : undefined, cwd);
 }
 
 export type { ExecutePatchResult } from "../patch/types.ts";
@@ -161,7 +158,7 @@ export function registerApplyPatchTool(pi: ExtensionAPI): void {
 			} catch (error) {
 				if (error instanceof ExecutePatchError) {
 					const partial = error.hasPartialSuccess();
-					const failedTarget = describeFailedAction(error);
+					const failedTarget = describeFailedAction(error, ctx.cwd);
 					const prefix = partial
 						? `apply_patch partially failed after ${summarizePatchCounts(error.result)}`
 						: "apply_patch failed";

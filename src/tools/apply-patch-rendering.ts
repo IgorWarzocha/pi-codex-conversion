@@ -38,14 +38,14 @@ export function formatApplyPatchSummary(patchText: string, cwd = process.cwd()):
 
 	if (files.length === 1) {
 		const [file] = files;
-		lines.push(`${bulletHeader(file.verb, renderPath(file.path, file.movePath, cwd))} ${renderCounts(file.added, file.removed)}`);
+		lines.push(`${bulletHeader(file.verb, formatPatchTarget(file.path, file.movePath, cwd))} ${renderCounts(file.added, file.removed)}`);
 		return lines.join("\n");
 	}
 
 	lines.push(`${bulletHeader("Edited", `${files.length} files`)} ${renderCounts(totalAdded, totalRemoved)}`);
 	for (const [index, file] of files.entries()) {
 		const prefix = index === 0 ? "  └ " : "    ";
-		lines.push(`${prefix}${renderPath(file.path, file.movePath, cwd)} ${renderCounts(file.added, file.removed)}`);
+		lines.push(`${prefix}${formatPatchTarget(file.path, file.movePath, cwd)} ${renderCounts(file.added, file.removed)}`);
 	}
 
 	return lines.join("\n");
@@ -70,7 +70,7 @@ export function formatApplyPatchCall(patchText: string, cwd = process.cwd()): st
 
 	if (files.length === 1) {
 		const [file] = files;
-		lines.push(`${bulletHeader(file.verb, renderPath(file.path, file.movePath, cwd))} ${renderCounts(file.added, file.removed)}`);
+		lines.push(`${bulletHeader(file.verb, formatPatchTarget(file.path, file.movePath, cwd))} ${renderCounts(file.added, file.removed)}`);
 		lines.push(...file.lines.map((line) => formatPreviewLine(line, file.lines)));
 		return lines.join("\n");
 	}
@@ -80,7 +80,7 @@ export function formatApplyPatchCall(patchText: string, cwd = process.cwd()): st
 		if (index > 0) {
 			lines.push("");
 		}
-		lines.push(`  └ ${renderPath(file.path, file.movePath, cwd)} ${renderCounts(file.added, file.removed)}`);
+		lines.push(`  └ ${formatPatchTarget(file.path, file.movePath, cwd)} ${renderCounts(file.added, file.removed)}`);
 		lines.push(...file.lines.map((line) => formatPreviewLine(line, file.lines)));
 	}
 
@@ -106,7 +106,7 @@ export function renderApplyPatchCall(patchText: string, cwd = process.cwd()): st
 
 	if (files.length === 1) {
 		const [file] = files;
-		lines.push(`${bulletHeader(file.verb, renderPath(file.path, file.movePath, cwd))} ${renderCounts(file.added, file.removed)}`);
+		lines.push(`${bulletHeader(file.verb, formatPatchTarget(file.path, file.movePath, cwd))} ${renderCounts(file.added, file.removed)}`);
 		lines.push(...renderPreviewLines(file.lines));
 		return lines.join("\n");
 	}
@@ -116,7 +116,7 @@ export function renderApplyPatchCall(patchText: string, cwd = process.cwd()): st
 		if (index > 0) {
 			lines.push("");
 		}
-		lines.push(`  └ ${renderPath(file.path, file.movePath, cwd)} ${renderCounts(file.added, file.removed)}`);
+		lines.push(`  └ ${formatPatchTarget(file.path, file.movePath, cwd)} ${renderCounts(file.added, file.removed)}`);
 		lines.push(...renderPreviewLines(file.lines));
 	}
 
@@ -303,7 +303,7 @@ function findSequence(lines: string[], context: string[], start: number, normali
 	return -1;
 }
 
-function renderPath(path: string, movePath: string | undefined, cwd: string): string {
+export function formatPatchTarget(path: string, movePath: string | undefined, cwd: string): string {
 	const from = displayPath(path, cwd);
 	if (!movePath) {
 		return from;

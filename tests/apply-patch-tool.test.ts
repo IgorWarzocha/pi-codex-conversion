@@ -138,3 +138,43 @@ test("apply_patch renderCall shows partial failure inline after some hunks alrea
 		await rm(cwd, { recursive: true, force: true });
 	}
 });
+
+test("apply_patch renderCall marks failed absolute-path entries inline using display paths", async () => {
+	const cwd = mkdtempSync(join(tmpdir(), "pi-codex-conversion-"));
+	const { pi, getTool } = createRegisteredTool();
+	registerApplyPatchTool(pi);
+	const theme = createTheme();
+
+	try {
+		const createdPath = join(cwd, "created.txt");
+		const missingPath = join(cwd, "missing.txt");
+		const patch = `*** Begin Patch
+*** Add File: ${createdPath}
++hello
+*** Update File: ${missingPath}
+@@
+-old
++new
+*** End Patch`;
+		const tool = getTool();
+		const execute = tool.execute;
+		const renderCall = tool.renderCall;
+		assert.ok(execute);
+		assert.ok(renderCall);
+
+		const result = (await execute("call-absolute-partial-failure", { input: patch }, undefined, undefined, { cwd })) as {
+			content: Array<{ type: string; text?: string }>;
+		};
+		assert.match(result.content[0]?.text ?? "", /while patching missing\.txt/);
+
+		const collapsed = renderComponentText(
+			renderCall({ input: patch }, theme, { toolCallId: "call-absolute-partial-failure", expanded: false, cwd }),
+		);
+
+		assert.match(collapsed, /^• Edit partially failed 2 files \(\+2 -1\)/);
+		assert.match(collapsed, /missing\.txt failed \(\+1 -1\)/);
+	} finally {
+		clearApplyPatchRenderState();
+		await rm(cwd, { recursive: true, force: true });
+	}
+});
