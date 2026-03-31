@@ -1,8 +1,14 @@
-import { mkdirSync, unlinkSync, writeFileSync } from "node:fs";
+import * as fs from "node:fs";
 import { dirname } from "node:path";
 import { parsePatchActions, parseUpdateFile } from "./parser.ts";
 import { openFileAtPath, pathExists, removeFileAtPath, resolvePatchPath, writeFileAtPath } from "./paths.ts";
 import { DiffError, ExecutePatchError, type ExecutePatchResult, type ParsedPatchAction, type ParserState, type PatchAction } from "./types.ts";
+
+export const patchFsOps = {
+	mkdirSync: fs.mkdirSync,
+	writeFileSync: fs.writeFileSync,
+	unlinkSync: fs.unlinkSync,
+};
 
 function buildExecutePatchResult({
 	changedFiles,
@@ -125,15 +131,15 @@ function applyMove({
 	const toAbsolutePath = resolvePatchPath({ cwd, patchPath: movePath });
 	const destinationExisted = pathExists({ cwd, path: movePath });
 
-	mkdirSync(dirname(toAbsolutePath), { recursive: true });
-	writeFileSync(toAbsolutePath, content, "utf8");
+	patchFsOps.mkdirSync(dirname(toAbsolutePath), { recursive: true });
+	patchFsOps.writeFileSync(toAbsolutePath, content, "utf8");
 	changedFiles.add(movePath);
 	if (!destinationExisted) {
 		createdFiles.add(movePath);
 	}
 
 	if (fromAbsolutePath !== toAbsolutePath) {
-		unlinkSync(fromAbsolutePath);
+		patchFsOps.unlinkSync(fromAbsolutePath);
 		changedFiles.add(path);
 		movedFiles.add(`${path} -> ${movePath}`);
 		deletedFiles.add(path);

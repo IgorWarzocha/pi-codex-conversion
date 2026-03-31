@@ -1,10 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { executePatch } from "../src/patch/core.ts";
+import { executePatch, patchFsOps } from "../src/patch/core.ts";
 import { ExecutePatchError } from "../src/patch/types.ts";
 
 test("executePatch updates, adds, and moves files inside cwd", async () => {
@@ -198,18 +198,23 @@ test("executePatch leaves earlier changes applied when a later hunk fails", asyn
 
 test("executePatch reports partial move side effects when unlink fails after writing the destination", async () => {
 	const cwd = mkdtempSync(join(tmpdir(), "pi-codex-conversion-"));
-	const lockedDir = join(cwd, "locked");
+	const sourcePath = join(cwd, "source.txt");
+	const originalUnlinkSync = patchFsOps.unlinkSync;
 	try {
-		mkdirSync(lockedDir, { recursive: true });
-		writeFileSync(join(lockedDir, "source.txt"), "from\n", "utf8");
-		chmodSync(lockedDir, 0o555);
+		writeFileSync(sourcePath, "from\n", "utf8");
+		patchFsOps.unlinkSync = (path) => {
+			if (String(path) === sourcePath) {
+				throw new Error("mock unlink failure");
+			}
+			return originalUnlinkSync(path);
+		};
 
 		let error: unknown;
 		try {
 			executePatch({
 				cwd,
 				patchText: `*** Begin Patch
-*** Update File: locked/source.txt
+*** Update File: source.txt
 *** Move to: moved/source.txt
 @@
 -from
@@ -218,6 +223,8 @@ test("executePatch reports partial move side effects when unlink fails after wri
 			});
 		} catch (caught) {
 			error = caught;
+		} finally {
+			patchFsOps.unlinkSync = originalUnlinkSync;
 		}
 
 		assert.ok(error instanceof ExecutePatchError);
@@ -226,9 +233,8 @@ test("executePatch reports partial move side effects when unlink fails after wri
 		assert.deepEqual(error.result.deletedFiles, []);
 		assert.deepEqual(error.result.movedFiles, []);
 		assert.equal(readFileSync(join(cwd, "moved/source.txt"), "utf8"), "to\n");
-		assert.equal(readFileSync(join(lockedDir, "source.txt"), "utf8"), "from\n");
+		assert.equal(readFileSync(sourcePath, "utf8"), "from\n");
 	} finally {
-		chmodSync(lockedDir, 0o755);
 		await rm(cwd, { recursive: true, force: true });
 	}
 });

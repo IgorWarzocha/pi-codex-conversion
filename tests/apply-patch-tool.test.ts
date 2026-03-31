@@ -1,10 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { rm, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { patchFsOps } from "../src/patch/core.ts";
 import { clearApplyPatchRenderState, registerApplyPatchTool } from "../src/tools/apply-patch-tool.ts";
 
 function createTheme() {
@@ -254,17 +255,22 @@ test("apply_patch renderCall preserves the original preview for partial failures
 
 test("apply_patch renderCall marks single-file partial failures after warning styling", async () => {
 	const cwd = mkdtempSync(join(tmpdir(), "pi-codex-conversion-"));
-	const lockedDir = join(cwd, "locked");
+	const sourcePath = join(cwd, "source.txt");
 	const { pi, getTool } = createRegisteredTool();
 	registerApplyPatchTool(pi);
 	const theme = createTheme();
+	const originalUnlinkSync = patchFsOps.unlinkSync;
 
 	try {
-		mkdirSync(lockedDir, { recursive: true });
-		writeFileSync(join(lockedDir, "source.txt"), "from\n", "utf8");
-		chmodSync(lockedDir, 0o555);
+		writeFileSync(sourcePath, "from\n", "utf8");
+		patchFsOps.unlinkSync = (path) => {
+			if (String(path) === sourcePath) {
+				throw new Error("mock unlink failure");
+			}
+			return originalUnlinkSync(path);
+		};
 		const patch = `*** Begin Patch
-*** Update File: locked/source.txt
+*** Update File: source.txt
 *** Move to: moved/source.txt
 @@
 -from
@@ -276,16 +282,19 @@ test("apply_patch renderCall marks single-file partial failures after warning st
 		assert.ok(execute);
 		assert.ok(renderCall);
 
-		await execute("call-single-file-partial-failure", { input: patch }, undefined, undefined, { cwd });
+		try {
+			await execute("call-single-file-partial-failure", { input: patch }, undefined, undefined, { cwd });
+		} finally {
+			patchFsOps.unlinkSync = originalUnlinkSync;
+		}
 
 		const collapsed = renderComponentText(
 			renderCall({ input: patch }, theme, { toolCallId: "call-single-file-partial-failure", expanded: false, cwd }),
 		);
 
-		assert.match(collapsed, /^• Edit partially failed locked\/source\.txt → moved\/source\.txt failed \(\+1 -1\)/);
+		assert.match(collapsed, /^• Edit partially failed source\.txt → moved\/source\.txt failed \(\+1 -1\)/);
 	} finally {
 		clearApplyPatchRenderState();
-		chmodSync(lockedDir, 0o755);
 		await rm(cwd, { recursive: true, force: true });
 	}
 });
