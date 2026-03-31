@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createExecSessionManager, type UnifiedExecResult } from "../src/tools/exec-session-manager.ts";
 
 function createFastTestExecSessionManager() {
-	return createExecSessionManager({ minNonInteractiveExecYieldTimeMs: 50, minEmptyWriteYieldTimeMs: 50 });
+	return createExecSessionManager({ minNonInteractiveExecYieldTimeMs: 50, minEmptyWriteYieldTimeMs: 50, maxSessionBufferChars: 4096 });
 }
 
 async function finishSession(
@@ -321,6 +321,27 @@ test("write_stdin rejects missing sessions", async () => {
 	const sessions = createFastTestExecSessionManager();
 	try {
 		await assert.rejects(() => sessions.write({ session_id: 99999 }), /Unknown process id 99999/);
+	} finally {
+		sessions.shutdown();
+	}
+});
+
+test("exec session manager caps buffered output to the configured maximum", async () => {
+	const sessions = createExecSessionManager({ maxSessionBufferChars: 1024, minNonInteractiveExecYieldTimeMs: 50, minEmptyWriteYieldTimeMs: 50 });
+	try {
+		const result = await sessions.exec(
+			{
+				cmd: "node -e \"process.stdout.write('a'.repeat(2000))\"",
+				shell: "/bin/bash",
+				login: false,
+				yield_time_ms: 500,
+			},
+			process.cwd(),
+		);
+
+		assert.equal(result.exit_code, 0);
+		assert.equal(result.output.length, 1024);
+		assert.equal(result.output, "a".repeat(1024));
 	} finally {
 		sessions.shutdown();
 	}

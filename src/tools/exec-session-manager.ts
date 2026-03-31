@@ -70,6 +70,7 @@ export interface ExecSessionManagerOptions {
 	defaultWriteYieldTimeMs?: number;
 	minNonInteractiveExecYieldTimeMs?: number;
 	minEmptyWriteYieldTimeMs?: number;
+	maxSessionBufferChars?: number;
 }
 
 const DEFAULT_EXEC_YIELD_TIME_MS = 10_000;
@@ -80,6 +81,7 @@ const MIN_NON_INTERACTIVE_EXEC_YIELD_TIME_MS = 5_000;
 const MIN_EMPTY_WRITE_YIELD_TIME_MS = 5_000;
 const MAX_YIELD_TIME_MS = 30_000;
 const MAX_COMMAND_HISTORY = 256;
+const DEFAULT_MAX_SESSION_BUFFER_CHARS = 256 * 1024 * 1024;
 
 function resolveWorkdir(baseCwd: string, workdir?: string): string {
 	if (!workdir) return baseCwd;
@@ -359,6 +361,7 @@ export function createExecSessionManager(options: ExecSessionManagerOptions = {}
 		MAX_YIELD_TIME_MS,
 		Math.max(MIN_YIELD_TIME_MS, options.minEmptyWriteYieldTimeMs ?? MIN_EMPTY_WRITE_YIELD_TIME_MS),
 	);
+	const maxSessionBufferChars = Math.max(1024, options.maxSessionBufferChars ?? DEFAULT_MAX_SESSION_BUFFER_CHARS);
 
 	function rememberCommand(sessionId: number, command: string): void {
 		commandHistory.set(sessionId, command);
@@ -388,6 +391,10 @@ export function createExecSessionManager(options: ExecSessionManagerOptions = {}
 		if (text.length === 0) return;
 		session.buffer =
 			session.kind === "pty" ? applyTerminalOutput(session, text) : `${session.buffer}${normalizePipeOutput(text)}`;
+		if (session.buffer.length > maxSessionBufferChars) {
+			session.buffer = session.buffer.slice(-maxSessionBufferChars);
+			session.emittedBuffer = "";
+		}
 		notify(session);
 	}
 
