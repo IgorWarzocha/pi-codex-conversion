@@ -30,6 +30,12 @@ interface ApplyPatchPartialFailureDetails {
 	result: ExecutePatchResult;
 	error: string;
 	failedTarget?: string;
+	appliedFiles: string[];
+	failedFiles: string[];
+	recoveryInstructions: {
+		mustReadFiles: string[];
+		mustNotReadFiles: string[];
+	};
 }
 
 type ApplyPatchToolDetails = ApplyPatchSuccessDetails | ApplyPatchPartialFailureDetails;
@@ -177,6 +183,25 @@ function summarizePatchCounts(result: ExecutePatchResult): string {
 	].join(", ");
 }
 
+function uniqueStrings(values: Array<string | undefined>): string[] {
+	return Array.from(new Set(values.filter((value): value is string => typeof value === "string" && value.length > 0)));
+}
+
+function buildPartialFailureMessage(message: string, failedTarget: string | undefined, result: ExecutePatchResult): string {
+	const failedFiles = uniqueStrings([failedTarget]);
+	const appliedFiles = result.changedFiles.filter((path) => !failedFiles.includes(path));
+	const lines = [message];
+	if (failedFiles.length > 0) {
+		lines.push(`Failed file: ${failedFiles.join(", ")}`);
+		lines.push(`Recovery: MUST read ${failedFiles.join(", ")} before retrying.`);
+	}
+	if (appliedFiles.length > 0) {
+		lines.push(`Applied files: ${appliedFiles.join(", ")}`);
+		lines.push(`Recovery: MUST NOT reread ${appliedFiles.join(", ")} unless a specific dependency requires it.`);
+	}
+	return lines.join("\n");
+}
+
 function describeFailedAction(error: ExecutePatchError, cwd: string): string | undefined {
 	if (!error.failedAction) {
 		return undefined;
@@ -253,14 +278,23 @@ export function registerApplyPatchTool(pi: ExtensionAPI): void {
 						: "apply_patch failed";
 					const message = failedTarget ? `${prefix} while patching ${failedTarget}: ${error.message}` : `${prefix}: ${error.message}`;
 					if (partial) {
+						const failedFiles = uniqueStrings([failedTarget]);
+						const appliedFiles = error.result.changedFiles.filter((path) => !failedFiles.includes(path));
+						const recoveryMessage = buildPartialFailureMessage(message, failedTarget, error.result);
 						markApplyPatchPartialFailure(toolCallId, failedTarget);
 						return {
-							content: [{ type: "text", text: message }],
+							content: [{ type: "text", text: recoveryMessage }],
 							details: {
 								status: "partial_failure",
 								result: error.result,
-								error: message,
+								error: recoveryMessage,
 								failedTarget,
+								appliedFiles,
+								failedFiles,
+								recoveryInstructions: {
+									mustReadFiles: failedFiles,
+									mustNotReadFiles: appliedFiles,
+								},
 							} satisfies ApplyPatchPartialFailureDetails,
 						};
 					}

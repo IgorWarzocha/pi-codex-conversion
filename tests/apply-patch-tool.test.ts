@@ -159,10 +159,20 @@ test("apply_patch renderCall shows partial failure inline after some hunks alrea
 
 		const result = (await execute("call-partial-failure", { input: patch }, undefined, undefined, { cwd })) as {
 			content: Array<{ type: string; text?: string }>;
-			details?: unknown;
+			details?: {
+				failedFiles?: string[];
+				appliedFiles?: string[];
+				recoveryInstructions?: { mustReadFiles?: string[]; mustNotReadFiles?: string[] };
+			};
 		};
 		assert.equal(result.content[0]?.type, "text");
 		assert.match(result.content[0]?.text ?? "", /partially failed/i);
+		assert.match(result.content[0]?.text ?? "", /MUST read missing\.txt before retrying\./);
+		assert.match(result.content[0]?.text ?? "", /MUST NOT reread created\.txt unless a specific dependency requires it\./);
+		assert.deepEqual(result.details?.failedFiles, ["missing.txt"]);
+		assert.deepEqual(result.details?.appliedFiles, ["created.txt"]);
+		assert.deepEqual(result.details?.recoveryInstructions?.mustReadFiles, ["missing.txt"]);
+		assert.deepEqual(result.details?.recoveryInstructions?.mustNotReadFiles, ["created.txt"]);
 
 		const collapsed = renderComponentText(
 			renderCall({ input: patch }, theme, { toolCallId: "call-partial-failure", expanded: false }),
