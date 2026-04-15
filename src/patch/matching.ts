@@ -6,7 +6,7 @@ export function lineMatchFuzz(left: string, right: string): number | undefined {
 }
 
 export function linesMatch(left: string, right: string): boolean {
-	return lineMatchFuzz(left, right) !== undefined;
+	return left === right || left.trimEnd() === right.trimEnd();
 }
 
 export function linesEqualFuzz({ left, right }: { left: string[]; right: string[] }): number | undefined {

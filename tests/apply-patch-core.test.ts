@@ -256,6 +256,35 @@ test("executePatch rejects case-mismatched deletions", async () => {
 	}
 });
 
+test("executePatch rejects indentation-only mismatched deletions", async () => {
+	const cwd = mkdtempSync(join(tmpdir(), "pi-codex-conversion-"));
+	try {
+		writeFileSync(join(cwd, "test.py"), 'print("x")\n', "utf8");
+
+		let error: unknown;
+		try {
+			executePatch({
+				cwd,
+				patchText: `*** Begin Patch
+*** Update File: test.py
+@@
+-    print("x")
++    print("y")
+*** End Patch`,
+			});
+		} catch (caught) {
+			error = caught;
+		}
+
+		assert.ok(error instanceof ExecutePatchError);
+		assert.match(error.message, /Expected\s+print\("x"\) but got print\("x"\)/i);
+		assert.deepEqual(error.result.changedFiles, []);
+		assert.equal(readFileSync(join(cwd, "test.py"), "utf8"), 'print("x")\n');
+	} finally {
+		await rm(cwd, { recursive: true, force: true });
+	}
+});
+
 test("executePatch prefers a later exact context match over an earlier fuzzy one", async () => {
 	const cwd = mkdtempSync(join(tmpdir(), "pi-codex-conversion-"));
 	try {
