@@ -17,7 +17,7 @@ interface ApplyPatchRenderState {
 	collapsed: string;
 	expanded: string;
 	status: "pending" | "partial_failure" | "failed";
-	failedTarget?: string;
+	failedTargets?: string[];
 }
 
 interface ApplyPatchSuccessDetails {
@@ -29,7 +29,7 @@ interface ApplyPatchPartialFailureDetails {
 	status: "partial_failure";
 	result: ExecutePatchResult;
 	error: string;
-	failedTarget?: string;
+	failedTargets?: string[];
 	appliedFiles: string[];
 	failedFiles: string[];
 	recoveryInstructions: {
@@ -65,7 +65,7 @@ function setApplyPatchRenderState(
 	patchText: string,
 	cwd: string,
 	status: "pending" | "partial_failure" | "failed" = "pending",
-	failedTarget?: string,
+	failedTargets?: string[],
 ): void {
 	const collapsed = formatApplyPatchSummary(patchText, cwd);
 	const expanded = renderApplyPatchCall(patchText, cwd);
@@ -75,15 +75,15 @@ function setApplyPatchRenderState(
 		collapsed,
 		expanded,
 		status,
-		failedTarget,
+		failedTargets,
 	});
 }
 
-function markApplyPatchPartialFailure(toolCallId: string, failedTarget?: string): void {
-	markApplyPatchFailure(toolCallId, "partial_failure", failedTarget);
+function markApplyPatchPartialFailure(toolCallId: string, failedTargets?: string[]): void {
+	markApplyPatchFailure(toolCallId, "partial_failure", failedTargets);
 }
 
-function markApplyPatchFailure(toolCallId: string, status: "partial_failure" | "failed", failedTarget?: string): void {
+function markApplyPatchFailure(toolCallId: string, status: "partial_failure" | "failed", failedTargets?: string[]): void {
 	const existing = applyPatchRenderStates.get(toolCallId);
 	if (!existing) {
 		return;
@@ -91,14 +91,14 @@ function markApplyPatchFailure(toolCallId: string, status: "partial_failure" | "
 	applyPatchRenderStates.set(toolCallId, {
 		...existing,
 		status,
-		failedTarget,
+		failedTargets,
 	});
 }
 
 function renderPartialFailureCall(
 	text: string,
 	theme: { fg(role: string, text: string): string },
-	failedTarget?: string,
+	failedTargets?: string[],
 ): string {
 	const lines = text.split("\n");
 	if (lines.length === 0) {
@@ -106,12 +106,15 @@ function renderPartialFailureCall(
 	}
 	lines[0] = lines[0].replace(/^• (Added|Edited|Deleted)\b/, "• Edit partially failed");
 	const failedLineIndexes = new Set<number>();
-	if (failedTarget) {
+	if (failedTargets) {
 		for (let i = 0; i < lines.length; i += 1) {
-			const failedLine = markFailedTargetLine(lines[i], failedTarget);
-			if (failedLine) {
-				lines[i] = failedLine;
-				failedLineIndexes.add(i);
+			for (const failedTarget of failedTargets) {
+				const failedLine = markFailedTargetLine(lines[i], failedTarget);
+				if (failedLine) {
+					lines[i] = failedLine;
+					failedLineIndexes.add(i);
+					break;
+				}
 			}
 		}
 	}
@@ -131,7 +134,7 @@ function renderPartialFailureCall(
 function renderFailedCall(
 	text: string,
 	theme: { fg(role: string, text: string): string },
-	failedTarget?: string,
+	failedTargets?: string[],
 ): string {
 	const lines = text.split("\n");
 	if (lines.length === 0) {
@@ -139,12 +142,15 @@ function renderFailedCall(
 	}
 	lines[0] = lines[0].replace(/^• (Added|Edited|Deleted)\b/, "• Edit failed");
 	const failedLineIndexes = new Set<number>();
-	if (failedTarget) {
+	if (failedTargets) {
 		for (let i = 0; i < lines.length; i += 1) {
-			const failedLine = markFailedTargetLine(lines[i], failedTarget);
-			if (failedLine) {
-				lines[i] = failedLine;
-				failedLineIndexes.add(i);
+			for (const failedTarget of failedTargets) {
+				const failedLine = markFailedTargetLine(lines[i], failedTarget);
+				if (failedLine) {
+					lines[i] = failedLine;
+					failedLineIndexes.add(i);
+					break;
+				}
 			}
 		}
 	}
@@ -188,13 +194,9 @@ function uniqueStrings(values: Array<string | undefined>): string[] {
 }
 
 function getFailedPaths(error: ExecutePatchError): string[] {
-	if (!error.failedAction) {
-		return [];
-	}
-	return uniqueStrings([
-		error.failedAction.path,
-		error.failedAction.type === "update" ? error.failedAction.movePath : undefined,
-	]);
+	return uniqueStrings(
+		error.failures.flatMap(({ action }) => [action.path, action.type === "update" ? action.movePath : undefined]),
+	);
 }
 
 function getAppliedPaths(result: ExecutePatchResult, failedFiles: string[]): string[] {
@@ -214,11 +216,10 @@ function buildPartialFailureMessage(message: string, failedFiles: string[], appl
 	return lines.join("\n");
 }
 
-function describeFailedAction(error: ExecutePatchError, cwd: string): string | undefined {
-	if (!error.failedAction) {
-		return undefined;
-	}
-	return formatPatchTarget(error.failedAction.path, error.failedAction.type === "update" ? error.failedAction.movePath : undefined, cwd);
+function describeFailedActions(error: ExecutePatchError, cwd: string): string[] {
+	return uniqueStrings(
+		error.failures.map(({ action }) => formatPatchTarget(action.path, action.type === "update" ? action.movePath : undefined, cwd)),
+	);
 }
 
 export type { ExecutePatchResult } from "../patch/types.ts";
@@ -253,9 +254,9 @@ const renderApplyPatchCallWithOptionalContext: any = (
 	}
 	const text =
 		cached?.status === "partial_failure"
-			? renderPartialFailureCall(baseText, theme, cached.failedTarget)
+			? renderPartialFailureCall(baseText, theme, cached.failedTargets)
 			: cached?.status === "failed"
-				? renderFailedCall(baseText, theme, cached.failedTarget)
+				? renderFailedCall(baseText, theme, cached.failedTargets)
 				: baseText;
 	return new Text(text, 0, 0);
 };
@@ -284,23 +285,24 @@ export function registerApplyPatchTool(pi: ExtensionAPI): void {
 			} catch (error) {
 				if (error instanceof ExecutePatchError) {
 					const partial = error.hasPartialSuccess();
-					const failedTarget = describeFailedAction(error, ctx.cwd);
+					const failedTargets = describeFailedActions(error, ctx.cwd);
+					const failedTargetSummary = failedTargets.join(", ");
 					const prefix = partial
 						? `apply_patch partially failed after ${summarizePatchCounts(error.result)}`
 						: "apply_patch failed";
-					const message = failedTarget ? `${prefix} while patching ${failedTarget}: ${error.message}` : `${prefix}: ${error.message}`;
+					const message = failedTargetSummary ? `${prefix} while patching ${failedTargetSummary}: ${error.message}` : `${prefix}: ${error.message}`;
 					if (partial) {
 						const failedFiles = getFailedPaths(error);
 						const appliedFiles = getAppliedPaths(error.result, failedFiles);
 						const recoveryMessage = buildPartialFailureMessage(message, failedFiles, appliedFiles);
-						markApplyPatchPartialFailure(toolCallId, failedTarget);
+						markApplyPatchPartialFailure(toolCallId, failedTargets);
 						return {
 							content: [{ type: "text", text: recoveryMessage }],
 							details: {
 								status: "partial_failure",
 								result: error.result,
 								error: recoveryMessage,
-								failedTarget,
+								failedTargets,
 								appliedFiles,
 								failedFiles,
 								recoveryInstructions: {
@@ -310,7 +312,7 @@ export function registerApplyPatchTool(pi: ExtensionAPI): void {
 							} satisfies ApplyPatchPartialFailureDetails,
 						};
 					}
-					markApplyPatchFailure(toolCallId, "failed", failedTarget);
+					markApplyPatchFailure(toolCallId, "failed", failedTargets);
 					throw new Error(message);
 				}
 				markApplyPatchFailure(toolCallId, "failed");

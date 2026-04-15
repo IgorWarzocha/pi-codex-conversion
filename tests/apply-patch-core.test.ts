@@ -196,6 +196,147 @@ test("executePatch leaves earlier changes applied when a later hunk fails", asyn
 	}
 });
 
+test("executePatch continues applying later file actions after a failed file action", async () => {
+	const cwd = mkdtempSync(join(tmpdir(), "pi-codex-conversion-"));
+	try {
+		let error: unknown;
+		try {
+			executePatch({
+				cwd,
+				patchText: `*** Begin Patch
+*** Add File: created.txt
++hello
+*** Update File: missing.txt
+@@
+-old
++new
+*** Add File: later.txt
++world
+*** End Patch`,
+			});
+		} catch (caught) {
+			error = caught;
+		}
+
+		assert.ok(error instanceof ExecutePatchError);
+		assert.match(error.message, /file not found|missing file/i);
+		assert.deepEqual(error.result.changedFiles.sort(), ["created.txt", "later.txt"]);
+		assert.deepEqual(error.result.createdFiles.sort(), ["created.txt", "later.txt"]);
+		assert.equal(error.failedAction?.path, "missing.txt");
+		assert.equal(error.failures.length, 1);
+
+		assert.equal(readFileSync(join(cwd, "created.txt"), "utf8"), "hello\n");
+		assert.equal(readFileSync(join(cwd, "later.txt"), "utf8"), "world\n");
+	} finally {
+		await rm(cwd, { recursive: true, force: true });
+	}
+});
+
+test("executePatch skips later actions that overlap a failed move", async () => {
+	const cwd = mkdtempSync(join(tmpdir(), "pi-codex-conversion-"));
+	const sourcePath = join(cwd, "a.txt");
+	const originalUnlinkSync = patchFsOps.unlinkSync;
+	try {
+		writeFileSync(sourcePath, "from\n", "utf8");
+		patchFsOps.unlinkSync = (path) => {
+			if (String(path) === sourcePath) {
+				throw new Error("mock unlink failure");
+			}
+			return originalUnlinkSync(path);
+		};
+
+		let error: unknown;
+		try {
+			executePatch({
+				cwd,
+				patchText: `*** Begin Patch
+*** Update File: a.txt
+*** Move to: b.txt
+@@
+-from
++to
+*** Update File: b.txt
+@@
+-to
++to2
+*** Add File: c.txt
++later
+*** End Patch`,
+			});
+		} catch (caught) {
+			error = caught;
+		} finally {
+			patchFsOps.unlinkSync = originalUnlinkSync;
+		}
+
+		assert.ok(error instanceof ExecutePatchError);
+		assert.equal(error.failures.length, 2);
+		assert.equal(error.failures[0]?.action.path, "a.txt");
+		assert.equal(error.failures[1]?.action.path, "b.txt");
+		assert.match(error.failures[1]?.message ?? "", /Skipped because an earlier failed action affected b\.txt/);
+		assert.deepEqual(error.result.changedFiles.sort(), ["b.txt", "c.txt"]);
+		assert.deepEqual(error.result.createdFiles.sort(), ["b.txt", "c.txt"]);
+		assert.equal(readFileSync(join(cwd, "a.txt"), "utf8"), "from\n");
+		assert.equal(readFileSync(join(cwd, "b.txt"), "utf8"), "to\n");
+		assert.equal(readFileSync(join(cwd, "c.txt"), "utf8"), "later\n");
+	} finally {
+		patchFsOps.unlinkSync = originalUnlinkSync;
+		await rm(cwd, { recursive: true, force: true });
+	}
+});
+
+test("executePatch blocks overlapping actions even when they use absolute and relative path aliases", async () => {
+	const cwd = mkdtempSync(join(tmpdir(), "pi-codex-conversion-"));
+	const sourcePath = join(cwd, "source.txt");
+	const movedPath = join(cwd, "moved.txt");
+	const originalUnlinkSync = patchFsOps.unlinkSync;
+	try {
+		writeFileSync(sourcePath, "from\n", "utf8");
+		patchFsOps.unlinkSync = (path) => {
+			if (String(path) === sourcePath) {
+				throw new Error("mock unlink failure");
+			}
+			return originalUnlinkSync(path);
+		};
+
+		let error: unknown;
+		try {
+			executePatch({
+				cwd,
+				patchText: `*** Begin Patch
+*** Update File: ${sourcePath}
+*** Move to: ${movedPath}
+@@
+-from
++to
+*** Update File: ./source.txt
+@@
+-from
++to2
+*** Add File: later.txt
++later
+*** End Patch`,
+			});
+		} catch (caught) {
+			error = caught;
+		} finally {
+			patchFsOps.unlinkSync = originalUnlinkSync;
+		}
+
+		assert.ok(error instanceof ExecutePatchError);
+		assert.equal(error.failures.length, 2);
+		assert.equal(error.failures[0]?.action.path, sourcePath);
+		assert.equal(error.failures[1]?.action.path, "./source.txt");
+		assert.match(error.failures[1]?.message ?? "", /Skipped because an earlier failed action affected \.\/source\.txt/);
+		assert.equal(readFileSync(sourcePath, "utf8"), "from\n");
+		assert.equal(readFileSync(movedPath, "utf8"), "to\n");
+		assert.equal(readFileSync(join(cwd, "later.txt"), "utf8"), "later\n");
+	} finally {
+		patchFsOps.unlinkSync = originalUnlinkSync;
+		await rm(cwd, { recursive: true, force: true });
+	}
+});
+
 test("executePatch applies multi-file updates despite whitespace drift in matched lines", async () => {
 	const cwd = mkdtempSync(join(tmpdir(), "pi-codex-conversion-"));
 	try {

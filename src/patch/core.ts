@@ -3,7 +3,7 @@ import { dirname } from "node:path";
 import { linesMatch } from "./matching.ts";
 import { parsePatchActions, parseUpdateFile } from "./parser.ts";
 import { openFileAtPath, pathExists, removeFileAtPath, resolvePatchPath, writeFileAtPath } from "./paths.ts";
-import { DiffError, ExecutePatchError, type ExecutePatchResult, type ParsedPatchAction, type ParserState, type PatchAction } from "./types.ts";
+import { DiffError, ExecutePatchError, type ExecutePatchFailure, type ExecutePatchResult, type ParsedPatchAction, type ParserState, type PatchAction } from "./types.ts";
 
 export const patchFsOps = {
 	mkdirSync: fs.mkdirSync,
@@ -218,6 +218,14 @@ function applyAction({
 	return fuzz;
 }
 
+function getActionPaths(action: ParsedPatchAction): string[] {
+	return [action.path, action.type === "update" ? action.movePath : undefined].filter((path): path is string => typeof path === "string");
+}
+
+function getCanonicalActionPaths({ cwd, action }: { cwd: string; action: ParsedPatchAction }): string[] {
+	return getActionPaths(action).map((path) => resolvePatchPath({ cwd, patchPath: path }));
+}
+
 export function executePatch({ cwd, patchText }: { cwd: string; patchText: string }): ExecutePatchResult {
 	if (!patchText.startsWith("*** Begin Patch")) {
 		throw new DiffError("Patch must start with '*** Begin Patch'");
@@ -228,9 +236,22 @@ export function executePatch({ cwd, patchText }: { cwd: string; patchText: strin
 	const createdFiles = new Set<string>();
 	const deletedFiles = new Set<string>();
 	const movedFiles = new Set<string>();
+	const blockedPaths = new Set<string>();
+	const failures: ExecutePatchFailure[] = [];
 	let fuzz = 0;
 
 	for (const action of actions) {
+		const actionPaths = getActionPaths(action);
+		const canonicalActionPaths = getCanonicalActionPaths({ cwd, action });
+		const overlappingPaths = canonicalActionPaths.filter((path) => blockedPaths.has(path));
+		if (overlappingPaths.length > 0) {
+			failures.push({
+				action,
+				message: `Skipped because an earlier failed action affected ${actionPaths.filter((_, index) => overlappingPaths.includes(canonicalActionPaths[index])).join(", ")}`,
+			});
+			continue;
+		}
+
 		try {
 			fuzz += applyAction({
 				cwd,
@@ -242,18 +263,29 @@ export function executePatch({ cwd, patchText }: { cwd: string; patchText: strin
 			});
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
-			throw new ExecutePatchError(
-				message,
-				buildExecutePatchResult({
-					changedFiles,
-					createdFiles,
-					deletedFiles,
-					movedFiles,
-					fuzz,
-				}),
-				action,
-			);
+			for (const path of canonicalActionPaths) {
+				blockedPaths.add(path);
+			}
+			failures.push({ action, message });
 		}
+	}
+
+	if (failures.length > 0) {
+		const message =
+			failures.length === 1
+				? failures[0].message
+				: failures.map(({ action, message: failureMessage }) => `${action.path}: ${failureMessage}`).join("\n");
+		throw new ExecutePatchError(
+			message,
+			buildExecutePatchResult({
+				changedFiles,
+				createdFiles,
+				deletedFiles,
+				movedFiles,
+				fuzz,
+			}),
+			failures,
+		);
 	}
 
 	return buildExecutePatchResult({
