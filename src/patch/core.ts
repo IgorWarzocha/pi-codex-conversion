@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import { dirname } from "node:path";
+import { linesMatch } from "./matching.ts";
 import { parsePatchActions, parseUpdateFile } from "./parser.ts";
 import { openFileAtPath, pathExists, removeFileAtPath, resolvePatchPath, writeFileAtPath } from "./paths.ts";
 import { DiffError, ExecutePatchError, type ExecutePatchResult, type ParsedPatchAction, type ParserState, type PatchAction } from "./types.ts";
@@ -9,22 +10,6 @@ export const patchFsOps = {
 	writeFileSync: fs.writeFileSync,
 	unlinkSync: fs.unlinkSync,
 };
-
-function normalizeUnicode(text: string): string {
-	return text
-		.replace(/[‘’‚‛]/g, "'")
-		.replace(/[“”„‟]/g, '"')
-		.replace(/[‐‑‒–—―−]/g, "-")
-		.replace(/…/g, "...")
-		.replace(/[            　]/g, " ");
-}
-
-function linesMatch(left: string, right: string): boolean {
-	if (left === right) return true;
-	if (left.trimEnd() === right.trimEnd()) return true;
-	if (left.trim() === right.trim()) return true;
-	return normalizeUnicode(left).trim().toLowerCase() === normalizeUnicode(right).trim().toLowerCase();
-}
 
 function buildExecutePatchResult({
 	changedFiles,

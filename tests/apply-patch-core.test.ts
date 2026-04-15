@@ -227,6 +227,57 @@ test("executePatch applies multi-file updates despite whitespace drift in matche
 	}
 });
 
+test("executePatch rejects case-mismatched deletions", async () => {
+	const cwd = mkdtempSync(join(tmpdir(), "pi-codex-conversion-"));
+	try {
+		writeFileSync(join(cwd, "ids.ts"), "const UserID = 1;\n", "utf8");
+
+		let error: unknown;
+		try {
+			executePatch({
+				cwd,
+				patchText: `*** Begin Patch
+*** Update File: ids.ts
+@@
+-const userid = 1;
++const userId = 2;
+*** End Patch`,
+			});
+		} catch (caught) {
+			error = caught;
+		}
+
+		assert.ok(error instanceof ExecutePatchError);
+		assert.match(error.message, /Failed to find expected lines in ids\.ts/i);
+		assert.deepEqual(error.result.changedFiles, []);
+		assert.equal(readFileSync(join(cwd, "ids.ts"), "utf8"), "const UserID = 1;\n");
+	} finally {
+		await rm(cwd, { recursive: true, force: true });
+	}
+});
+
+test("executePatch prefers a later exact context match over an earlier fuzzy one", async () => {
+	const cwd = mkdtempSync(join(tmpdir(), "pi-codex-conversion-"));
+	try {
+		writeFileSync(join(cwd, "targets.txt"), "target   \ntarget\n", "utf8");
+
+		const result = executePatch({
+			cwd,
+			patchText: `*** Begin Patch
+*** Update File: targets.txt
+@@
+-target
++chosen
+*** End Patch`,
+		});
+
+		assert.equal(readFileSync(join(cwd, "targets.txt"), "utf8"), "target   \nchosen\n");
+		assert.equal(result.fuzz, 0);
+	} finally {
+		await rm(cwd, { recursive: true, force: true });
+	}
+});
+
 test("executePatch reports partial move side effects when unlink fails after writing the destination", async () => {
 	const cwd = mkdtempSync(join(tmpdir(), "pi-codex-conversion-"));
 	const sourcePath = join(cwd, "source.txt");
