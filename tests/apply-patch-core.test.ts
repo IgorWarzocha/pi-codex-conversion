@@ -285,6 +285,58 @@ test("executePatch skips later actions that overlap a failed move", async () => 
 	}
 });
 
+test("executePatch blocks overlapping actions even when they use absolute and relative path aliases", async () => {
+	const cwd = mkdtempSync(join(tmpdir(), "pi-codex-conversion-"));
+	const sourcePath = join(cwd, "source.txt");
+	const movedPath = join(cwd, "moved.txt");
+	const originalUnlinkSync = patchFsOps.unlinkSync;
+	try {
+		writeFileSync(sourcePath, "from\n", "utf8");
+		patchFsOps.unlinkSync = (path) => {
+			if (String(path) === sourcePath) {
+				throw new Error("mock unlink failure");
+			}
+			return originalUnlinkSync(path);
+		};
+
+		let error: unknown;
+		try {
+			executePatch({
+				cwd,
+				patchText: `*** Begin Patch
+*** Update File: ${sourcePath}
+*** Move to: ${movedPath}
+@@
+-from
++to
+*** Update File: ./source.txt
+@@
+-from
++to2
+*** Add File: later.txt
++later
+*** End Patch`,
+			});
+		} catch (caught) {
+			error = caught;
+		} finally {
+			patchFsOps.unlinkSync = originalUnlinkSync;
+		}
+
+		assert.ok(error instanceof ExecutePatchError);
+		assert.equal(error.failures.length, 2);
+		assert.equal(error.failures[0]?.action.path, sourcePath);
+		assert.equal(error.failures[1]?.action.path, "./source.txt");
+		assert.match(error.failures[1]?.message ?? "", /Skipped because an earlier failed action affected \.\/source\.txt/);
+		assert.equal(readFileSync(sourcePath, "utf8"), "from\n");
+		assert.equal(readFileSync(movedPath, "utf8"), "to\n");
+		assert.equal(readFileSync(join(cwd, "later.txt"), "utf8"), "later\n");
+	} finally {
+		patchFsOps.unlinkSync = originalUnlinkSync;
+		await rm(cwd, { recursive: true, force: true });
+	}
+});
+
 test("executePatch applies multi-file updates despite whitespace drift in matched lines", async () => {
 	const cwd = mkdtempSync(join(tmpdir(), "pi-codex-conversion-"));
 	try {

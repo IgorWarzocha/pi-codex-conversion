@@ -222,6 +222,10 @@ function getActionPaths(action: ParsedPatchAction): string[] {
 	return [action.path, action.type === "update" ? action.movePath : undefined].filter((path): path is string => typeof path === "string");
 }
 
+function getCanonicalActionPaths({ cwd, action }: { cwd: string; action: ParsedPatchAction }): string[] {
+	return getActionPaths(action).map((path) => resolvePatchPath({ cwd, patchPath: path }));
+}
+
 export function executePatch({ cwd, patchText }: { cwd: string; patchText: string }): ExecutePatchResult {
 	if (!patchText.startsWith("*** Begin Patch")) {
 		throw new DiffError("Patch must start with '*** Begin Patch'");
@@ -238,11 +242,12 @@ export function executePatch({ cwd, patchText }: { cwd: string; patchText: strin
 
 	for (const action of actions) {
 		const actionPaths = getActionPaths(action);
-		const overlappingPaths = actionPaths.filter((path) => blockedPaths.has(path));
+		const canonicalActionPaths = getCanonicalActionPaths({ cwd, action });
+		const overlappingPaths = canonicalActionPaths.filter((path) => blockedPaths.has(path));
 		if (overlappingPaths.length > 0) {
 			failures.push({
 				action,
-				message: `Skipped because an earlier failed action affected ${overlappingPaths.join(", ")}`,
+				message: `Skipped because an earlier failed action affected ${actionPaths.filter((_, index) => overlappingPaths.includes(canonicalActionPaths[index])).join(", ")}`,
 			});
 			continue;
 		}
@@ -258,7 +263,7 @@ export function executePatch({ cwd, patchText }: { cwd: string; patchText: strin
 			});
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
-			for (const path of actionPaths) {
+			for (const path of canonicalActionPaths) {
 				blockedPaths.add(path);
 			}
 			failures.push({ action, message });
