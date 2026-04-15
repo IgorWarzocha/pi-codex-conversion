@@ -57,51 +57,31 @@ function findContextCore({ lines, context, start }: { lines: string[]; context: 
 		return { newIndex: start, fuzz: 0 };
 	}
 
-	let bestIndex = -1;
-	let bestFuzz = Number.POSITIVE_INFINITY;
-	let bestWorstLineFuzz = Number.POSITIVE_INFINITY;
-
-	for (let index = start; index <= lines.length - context.length; index++) {
-		const quality = linesEqualFuzz({ left: lines.slice(index, index + context.length), right: context });
-		if (quality !== undefined) {
-			if (quality.fuzz === 0) {
+	for (const tier of [0, 1, 100]) {
+		for (let index = start; index <= lines.length - context.length; index++) {
+			const quality = linesEqualFuzz({ left: lines.slice(index, index + context.length), right: context });
+			if (quality?.worstLineFuzz === tier) {
 				return { newIndex: index, fuzz: quality.fuzz };
 			}
-			if (quality.worstLineFuzz < bestWorstLineFuzz || (quality.worstLineFuzz === bestWorstLineFuzz && quality.fuzz < bestFuzz)) {
-				bestIndex = index;
-				bestFuzz = quality.fuzz;
-				bestWorstLineFuzz = quality.worstLineFuzz;
-			}
 		}
-	}
-
-	if (bestIndex !== -1) {
-		return { newIndex: bestIndex, fuzz: bestFuzz };
 	}
 
 	return { newIndex: -1, fuzz: 0 };
 }
 
 function findSectionAnchor({ lines, target, start }: { lines: string[]; target: string; start: number }): { newIndex: number; fuzz: number } {
-	let bestIndex = -1;
-	let bestFuzz = Number.POSITIVE_INFINITY;
-
-	for (let index = start; index < lines.length; index++) {
-		const fuzz = lineMatchFuzz(lines[index], target);
-		if (fuzz === undefined) {
+	for (const tier of [0, 1, 100]) {
+		const alreadySeen = lines.slice(0, start).some((line) => lineMatchFuzz(line, target) === tier);
+		if (alreadySeen) {
 			continue;
 		}
-		if (fuzz === 0) {
-			return { newIndex: index, fuzz };
-		}
-		if (fuzz < bestFuzz) {
-			bestIndex = index;
-			bestFuzz = fuzz;
-		}
-	}
 
-	if (bestIndex !== -1) {
-		return { newIndex: bestIndex, fuzz: bestFuzz };
+		for (let index = start; index < lines.length; index++) {
+			const fuzz = lineMatchFuzz(lines[index], target);
+			if (fuzz === tier) {
+				return { newIndex: index, fuzz };
+			}
+		}
 	}
 
 	return { newIndex: -1, fuzz: 0 };
