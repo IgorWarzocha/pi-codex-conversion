@@ -193,6 +193,51 @@ test("apply_patch renderCall shows partial failure inline after some hunks alrea
 	}
 });
 
+test("apply_patch keeps applying later files after one file fails", async () => {
+	const cwd = mkdtempSync(join(tmpdir(), "pi-codex-conversion-"));
+	const { pi, getTool } = createRegisteredTool();
+	registerApplyPatchTool(pi);
+
+	try {
+		const result = (await getTool().execute?.(
+			"call-continue-after-failure",
+			{
+				input: `*** Begin Patch
+*** Add File: created.txt
++hello
+*** Update File: missing.txt
+@@
+-old
++new
+*** Add File: later.txt
++world
+*** End Patch`,
+			},
+			undefined,
+			undefined,
+			{ cwd },
+		)) as {
+			content: Array<{ type: string; text?: string }>;
+			details?: {
+				failedFiles?: string[];
+				appliedFiles?: string[];
+				recoveryInstructions?: { mustReadFiles?: string[]; mustNotReadFiles?: string[] };
+			};
+		};
+
+		assert.match(result.content[0]?.text ?? "", /partially failed/i);
+		assert.deepEqual(result.details?.failedFiles, ["missing.txt"]);
+		assert.deepEqual(result.details?.appliedFiles?.sort(), ["created.txt", "later.txt"]);
+		assert.deepEqual(result.details?.recoveryInstructions?.mustReadFiles, ["missing.txt"]);
+		assert.deepEqual(result.details?.recoveryInstructions?.mustNotReadFiles?.sort(), ["created.txt", "later.txt"]);
+		assert.equal(await readFile(join(cwd, "created.txt"), "utf8"), "hello\n");
+		assert.equal(await readFile(join(cwd, "later.txt"), "utf8"), "world\n");
+	} finally {
+		clearApplyPatchRenderState();
+		await rm(cwd, { recursive: true, force: true });
+	}
+});
+
 test("apply_patch renderCall marks failed absolute-path entries inline using display paths", async () => {
 	const cwd = mkdtempSync(join(tmpdir(), "pi-codex-conversion-"));
 	const { pi, getTool } = createRegisteredTool();

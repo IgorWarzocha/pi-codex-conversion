@@ -36,6 +36,11 @@ export interface ExecutePatchResult {
 	fuzz: number;
 }
 
+export interface ExecutePatchFailure {
+	action: ParsedPatchAction;
+	message: string;
+}
+
 export class DiffError extends Error {
 	constructor(message: string) {
 		super(message);
@@ -46,12 +51,14 @@ export class DiffError extends Error {
 export class ExecutePatchError extends DiffError {
 	result: ExecutePatchResult;
 	failedAction?: ParsedPatchAction;
+	failures: ExecutePatchFailure[];
 
-	constructor(message: string, result: ExecutePatchResult, failedAction?: ParsedPatchAction) {
+	constructor(message: string, result: ExecutePatchResult, failures: ExecutePatchFailure[] = []) {
 		super(message);
 		this.name = "ExecutePatchError";
 		this.result = result;
-		this.failedAction = failedAction;
+		this.failures = failures;
+		this.failedAction = failures[0]?.action;
 	}
 
 	hasPartialSuccess(): boolean {

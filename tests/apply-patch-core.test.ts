@@ -196,6 +196,42 @@ test("executePatch leaves earlier changes applied when a later hunk fails", asyn
 	}
 });
 
+test("executePatch continues applying later file actions after a failed file action", async () => {
+	const cwd = mkdtempSync(join(tmpdir(), "pi-codex-conversion-"));
+	try {
+		let error: unknown;
+		try {
+			executePatch({
+				cwd,
+				patchText: `*** Begin Patch
+*** Add File: created.txt
++hello
+*** Update File: missing.txt
+@@
+-old
++new
+*** Add File: later.txt
++world
+*** End Patch`,
+			});
+		} catch (caught) {
+			error = caught;
+		}
+
+		assert.ok(error instanceof ExecutePatchError);
+		assert.match(error.message, /file not found|missing file/i);
+		assert.deepEqual(error.result.changedFiles.sort(), ["created.txt", "later.txt"]);
+		assert.deepEqual(error.result.createdFiles.sort(), ["created.txt", "later.txt"]);
+		assert.equal(error.failedAction?.path, "missing.txt");
+		assert.equal(error.failures.length, 1);
+
+		assert.equal(readFileSync(join(cwd, "created.txt"), "utf8"), "hello\n");
+		assert.equal(readFileSync(join(cwd, "later.txt"), "utf8"), "world\n");
+	} finally {
+		await rm(cwd, { recursive: true, force: true });
+	}
+});
+
 test("executePatch applies multi-file updates despite whitespace drift in matched lines", async () => {
 	const cwd = mkdtempSync(join(tmpdir(), "pi-codex-conversion-"));
 	try {

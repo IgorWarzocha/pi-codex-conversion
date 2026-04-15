@@ -3,7 +3,7 @@ import { dirname } from "node:path";
 import { linesMatch } from "./matching.ts";
 import { parsePatchActions, parseUpdateFile } from "./parser.ts";
 import { openFileAtPath, pathExists, removeFileAtPath, resolvePatchPath, writeFileAtPath } from "./paths.ts";
-import { DiffError, ExecutePatchError, type ExecutePatchResult, type ParsedPatchAction, type ParserState, type PatchAction } from "./types.ts";
+import { DiffError, ExecutePatchError, type ExecutePatchFailure, type ExecutePatchResult, type ParsedPatchAction, type ParserState, type PatchAction } from "./types.ts";
 
 export const patchFsOps = {
 	mkdirSync: fs.mkdirSync,
@@ -228,6 +228,7 @@ export function executePatch({ cwd, patchText }: { cwd: string; patchText: strin
 	const createdFiles = new Set<string>();
 	const deletedFiles = new Set<string>();
 	const movedFiles = new Set<string>();
+	const failures: ExecutePatchFailure[] = [];
 	let fuzz = 0;
 
 	for (const action of actions) {
@@ -242,18 +243,26 @@ export function executePatch({ cwd, patchText }: { cwd: string; patchText: strin
 			});
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
-			throw new ExecutePatchError(
-				message,
-				buildExecutePatchResult({
-					changedFiles,
-					createdFiles,
-					deletedFiles,
-					movedFiles,
-					fuzz,
-				}),
-				action,
-			);
+			failures.push({ action, message });
 		}
+	}
+
+	if (failures.length > 0) {
+		const message =
+			failures.length === 1
+				? failures[0].message
+				: failures.map(({ action, message: failureMessage }) => `${action.path}: ${failureMessage}`).join("\n");
+		throw new ExecutePatchError(
+			message,
+			buildExecutePatchResult({
+				changedFiles,
+				createdFiles,
+				deletedFiles,
+				movedFiles,
+				fuzz,
+			}),
+			failures,
+		);
 	}
 
 	return buildExecutePatchResult({
