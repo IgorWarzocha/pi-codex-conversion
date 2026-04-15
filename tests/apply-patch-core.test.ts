@@ -196,6 +196,289 @@ test("executePatch leaves earlier changes applied when a later hunk fails", asyn
 	}
 });
 
+test("executePatch applies multi-file updates despite whitespace drift in matched lines", async () => {
+	const cwd = mkdtempSync(join(tmpdir(), "pi-codex-conversion-"));
+	try {
+		writeFileSync(join(cwd, "alpha.txt"), "old line   \nkeep line\n", "utf8");
+		writeFileSync(join(cwd, "beta.txt"), "first value\nsecond value   \n", "utf8");
+
+		const result = executePatch({
+			cwd,
+			patchText: `*** Begin Patch
+*** Update File: alpha.txt
+@@
+-old line
++new line
+ keep line
+*** Update File: beta.txt
+@@
+ first value
+-second value
++second value updated
+*** End Patch`,
+		});
+
+		assert.deepEqual(result.changedFiles.sort(), ["alpha.txt", "beta.txt"]);
+		assert.equal(readFileSync(join(cwd, "alpha.txt"), "utf8"), "new line\nkeep line\n");
+		assert.equal(readFileSync(join(cwd, "beta.txt"), "utf8"), "first value\nsecond value updated\n");
+		assert.ok(result.fuzz > 0);
+	} finally {
+		await rm(cwd, { recursive: true, force: true });
+	}
+});
+
+test("executePatch rejects case-mismatched deletions", async () => {
+	const cwd = mkdtempSync(join(tmpdir(), "pi-codex-conversion-"));
+	try {
+		writeFileSync(join(cwd, "ids.ts"), "const UserID = 1;\n", "utf8");
+
+		let error: unknown;
+		try {
+			executePatch({
+				cwd,
+				patchText: `*** Begin Patch
+*** Update File: ids.ts
+@@
+-const userid = 1;
++const userId = 2;
+*** End Patch`,
+			});
+		} catch (caught) {
+			error = caught;
+		}
+
+		assert.ok(error instanceof ExecutePatchError);
+		assert.match(error.message, /Failed to find expected lines in ids\.ts/i);
+		assert.deepEqual(error.result.changedFiles, []);
+		assert.equal(readFileSync(join(cwd, "ids.ts"), "utf8"), "const UserID = 1;\n");
+	} finally {
+		await rm(cwd, { recursive: true, force: true });
+	}
+});
+
+test("executePatch rejects indentation-only mismatched deletions", async () => {
+	const cwd = mkdtempSync(join(tmpdir(), "pi-codex-conversion-"));
+	try {
+		writeFileSync(join(cwd, "test.py"), 'print("x")\n', "utf8");
+
+		let error: unknown;
+		try {
+			executePatch({
+				cwd,
+				patchText: `*** Begin Patch
+*** Update File: test.py
+@@
+-    print("x")
++    print("y")
+*** End Patch`,
+			});
+		} catch (caught) {
+			error = caught;
+		}
+
+		assert.ok(error instanceof ExecutePatchError);
+		assert.match(error.message, /Expected\s+print\("x"\) but got print\("x"\)/i);
+		assert.deepEqual(error.result.changedFiles, []);
+		assert.equal(readFileSync(join(cwd, "test.py"), "utf8"), 'print("x")\n');
+	} finally {
+		await rm(cwd, { recursive: true, force: true });
+	}
+});
+
+test("executePatch prefers a later exact context match over an earlier fuzzy one", async () => {
+	const cwd = mkdtempSync(join(tmpdir(), "pi-codex-conversion-"));
+	try {
+		writeFileSync(join(cwd, "targets.txt"), "target   \ntarget\n", "utf8");
+
+		const result = executePatch({
+			cwd,
+			patchText: `*** Begin Patch
+*** Update File: targets.txt
+@@
+-target
++chosen
+*** End Patch`,
+		});
+
+		assert.equal(readFileSync(join(cwd, "targets.txt"), "utf8"), "target   \nchosen\n");
+		assert.equal(result.fuzz, 0);
+	} finally {
+		await rm(cwd, { recursive: true, force: true });
+	}
+});
+
+test("executePatch prefers trimEnd-only context matches over trim-level matches for insertion hunks", async () => {
+	const cwd = mkdtempSync(join(tmpdir(), "pi-codex-conversion-"));
+	try {
+		const context = Array.from({ length: 101 }, (_, index) => `ctx${index}`);
+		const earlierTrimLevelMatch = [...context];
+		earlierTrimLevelMatch[50] = "  ctx50";
+		const laterTrimEndMatch = context.map((line) => `${line}   `);
+
+		writeFileSync(join(cwd, "targets.txt"), ["before-trim", ...earlierTrimLevelMatch, "between", ...laterTrimEndMatch, "after"].join("\n") + "\n", "utf8");
+
+		const result = executePatch({
+			cwd,
+			patchText: `*** Begin Patch
+*** Update File: targets.txt
+@@
+ ${context.slice(0, 50).join("\n ")}
++inserted
+ ${context.slice(50).join("\n ")}
+*** End Patch`,
+		});
+
+		assert.equal(result.fuzz, 101);
+		assert.equal(
+			readFileSync(join(cwd, "targets.txt"), "utf8"),
+			["before-trim", ...earlierTrimLevelMatch, "between", ...laterTrimEndMatch.slice(0, 50), "inserted", ...laterTrimEndMatch.slice(50), "after"].join("\n") + "\n",
+		);
+	} finally {
+		await rm(cwd, { recursive: true, force: true });
+	}
+});
+
+test("executePatch keeps first-match locality within a fuzzy context tier across sequential hunks", async () => {
+	const cwd = mkdtempSync(join(tmpdir(), "pi-codex-conversion-"));
+	try {
+		writeFileSync(
+			join(cwd, "targets.txt"),
+			[
+				"marker",
+				"ctx1   ",
+				"ctx2   ",
+				"first-end",
+				"ctx1   ",
+				"ctx2",
+				"second-end",
+			].join("\n") + "\n",
+			"utf8",
+		);
+
+		const result = executePatch({
+			cwd,
+			patchText: `*** Begin Patch
+*** Update File: targets.txt
+@@
+ marker
++after-marker
+@@
+ ctx1
+ ctx2
++first-match
+*** End Patch`,
+		});
+
+		assert.equal(result.fuzz, 2);
+		assert.equal(
+			readFileSync(join(cwd, "targets.txt"), "utf8"),
+			[
+				"marker",
+				"after-marker",
+				"ctx1   ",
+				"ctx2   ",
+				"first-match",
+				"first-end",
+				"ctx1   ",
+				"ctx2",
+				"second-end",
+			].join("\n") + "\n",
+		);
+	} finally {
+		await rm(cwd, { recursive: true, force: true });
+	}
+});
+
+test("executePatch prefers trimEnd-only section anchors over trim-level anchors", async () => {
+	const cwd = mkdtempSync(join(tmpdir(), "pi-codex-conversion-"));
+	try {
+		writeFileSync(
+			join(cwd, "module.py"),
+			[
+				"class Wrapper:",
+				"    def foo():",
+				"        pass",
+				"",
+				"def foo():   ",
+				"    pass",
+			].join("\n") + "\n",
+			"utf8",
+		);
+
+		const result = executePatch({
+			cwd,
+			patchText: `*** Begin Patch
+*** Update File: module.py
+@@ def foo():
++    inserted = True
+*** End Patch`,
+		});
+
+		assert.equal(result.fuzz, 1);
+		assert.equal(
+			readFileSync(join(cwd, "module.py"), "utf8"),
+			[
+				"class Wrapper:",
+				"    def foo():",
+				"        pass",
+				"",
+				"def foo():   ",
+				"    inserted = True",
+				"    pass",
+			].join("\n") + "\n",
+		);
+	} finally {
+		await rm(cwd, { recursive: true, force: true });
+	}
+});
+
+test("executePatch keeps repeated section headers anchored to the current section", async () => {
+	const cwd = mkdtempSync(join(tmpdir(), "pi-codex-conversion-"));
+	try {
+		writeFileSync(
+			join(cwd, "module.py"),
+			[
+				"def foo():",
+				"    first = 1",
+				"    keep = 2",
+				"",
+				"def foo():",
+				"    first = 10",
+				"    keep = 20",
+			].join("\n") + "\n",
+			"utf8",
+		);
+
+		executePatch({
+			cwd,
+			patchText: `*** Begin Patch
+*** Update File: module.py
+@@ def foo():
+-    first = 1
++    first = 2
+@@ def foo():
+-    keep = 2
++    keep = 3
+*** End Patch`,
+		});
+
+		assert.equal(
+			readFileSync(join(cwd, "module.py"), "utf8"),
+			[
+				"def foo():",
+				"    first = 2",
+				"    keep = 3",
+				"",
+				"def foo():",
+				"    first = 10",
+				"    keep = 20",
+			].join("\n") + "\n",
+		);
+	} finally {
+		await rm(cwd, { recursive: true, force: true });
+	}
+});
+
 test("executePatch reports partial move side effects when unlink fails after writing the destination", async () => {
 	const cwd = mkdtempSync(join(tmpdir(), "pi-codex-conversion-"));
 	const sourcePath = join(cwd, "source.txt");

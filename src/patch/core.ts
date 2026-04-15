@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import { dirname } from "node:path";
+import { linesMatch } from "./matching.ts";
 import { parsePatchActions, parseUpdateFile } from "./parser.ts";
 import { openFileAtPath, pathExists, removeFileAtPath, resolvePatchPath, writeFileAtPath } from "./paths.ts";
 import { DiffError, ExecutePatchError, type ExecutePatchResult, type ParsedPatchAction, type ParserState, type PatchAction } from "./types.ts";
@@ -64,7 +65,7 @@ function getUpdatedFile({ text, action, path }: { text: string; action: PatchAct
 		destIndex += delta;
 
 		for (const line of chunk.delLines) {
-			if (origLines[origIndex] !== line) {
+			if (!linesMatch(origLines[origIndex] ?? "", line)) {
 				throw new DiffError(`_get_updated_file: ${path}: Expected ${line} but got ${origLines[origIndex]} at line ${origIndex + 1}`);
 			}
 			origIndex += 1;

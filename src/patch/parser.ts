@@ -1,3 +1,4 @@
+import { lineMatchFuzz, linesEqualFuzz } from "./matching.ts";
 import { normalizePatchPath } from "./paths.ts";
 import { DiffError, type Chunk, type ParseMode, type ParsedPatchAction, type ParserState, type PatchAction } from "./types.ts";
 
@@ -48,14 +49,6 @@ function splitFileLines(text: string): string[] {
 	return lines;
 }
 
-function linesEqual({ left, right }: { left: string[]; right: string[] }): boolean {
-	if (left.length !== right.length) return false;
-	for (let index = 0; index < left.length; index++) {
-		if (left[index] !== right[index]) return false;
-	}
-	return true;
-}
-
 function findContextCore({ lines, context, start }: { lines: string[]; context: string[]; start: number }): {
 	newIndex: number;
 	fuzz: number;
@@ -64,25 +57,30 @@ function findContextCore({ lines, context, start }: { lines: string[]; context: 
 		return { newIndex: start, fuzz: 0 };
 	}
 
-	for (let index = start; index < lines.length; index++) {
-		if (linesEqual({ left: lines.slice(index, index + context.length), right: context })) {
-			return { newIndex: index, fuzz: 0 };
+	for (const tier of [0, 1, 100]) {
+		for (let index = start; index <= lines.length - context.length; index++) {
+			const quality = linesEqualFuzz({ left: lines.slice(index, index + context.length), right: context });
+			if (quality?.worstLineFuzz === tier) {
+				return { newIndex: index, fuzz: quality.fuzz };
+			}
 		}
 	}
 
-	for (let index = start; index < lines.length; index++) {
-		const left = lines.slice(index, index + context.length).map((line) => line.trimEnd());
-		const right = context.map((line) => line.trimEnd());
-		if (linesEqual({ left, right })) {
-			return { newIndex: index, fuzz: 1 };
-		}
-	}
+	return { newIndex: -1, fuzz: 0 };
+}
 
-	for (let index = start; index < lines.length; index++) {
-		const left = lines.slice(index, index + context.length).map((line) => line.trim());
-		const right = context.map((line) => line.trim());
-		if (linesEqual({ left, right })) {
-			return { newIndex: index, fuzz: 100 };
+function findSectionAnchor({ lines, target, start }: { lines: string[]; target: string; start: number }): { newIndex: number; fuzz: number } {
+	for (const tier of [0, 1, 100]) {
+		const alreadySeen = lines.slice(0, start).some((line) => lineMatchFuzz(line, target) === tier);
+		if (alreadySeen) {
+			continue;
+		}
+
+		for (let index = start; index < lines.length; index++) {
+			const fuzz = lineMatchFuzz(lines[index], target);
+			if (fuzz === tier) {
+				return { newIndex: index, fuzz };
+			}
 		}
 	}
 
@@ -263,30 +261,10 @@ export function parseUpdateFile({ state, text, path }: { state: ParserState; tex
 		}
 
 		if (defStr.trim().length > 0) {
-			let found = false;
-
-			const exactAlreadySeen = lines.slice(0, index).some((line) => line === defStr);
-			if (!exactAlreadySeen) {
-				for (let lineIndex = index; lineIndex < lines.length; lineIndex++) {
-					if (lines[lineIndex] === defStr) {
-						index = lineIndex + 1;
-						found = true;
-						break;
-					}
-				}
-			}
-
-			if (!found) {
-				const trimAlreadySeen = lines.slice(0, index).some((line) => line.trim() === defStr.trim());
-				if (!trimAlreadySeen) {
-					for (let lineIndex = index; lineIndex < lines.length; lineIndex++) {
-						if (lines[lineIndex].trim() === defStr.trim()) {
-							index = lineIndex + 1;
-							state.fuzz += 1;
-							break;
-						}
-					}
-				}
+			const sectionAnchor = findSectionAnchor({ lines, target: defStr, start: index });
+			if (sectionAnchor.newIndex !== -1) {
+				index = sectionAnchor.newIndex + 1;
+				state.fuzz += sectionAnchor.fuzz;
 			}
 		}
 
