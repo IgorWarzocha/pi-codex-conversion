@@ -59,16 +59,18 @@ function findContextCore({ lines, context, start }: { lines: string[]; context: 
 
 	let bestIndex = -1;
 	let bestFuzz = Number.POSITIVE_INFINITY;
+	let bestWorstLineFuzz = Number.POSITIVE_INFINITY;
 
 	for (let index = start; index <= lines.length - context.length; index++) {
-		const fuzz = linesEqualFuzz({ left: lines.slice(index, index + context.length), right: context });
-		if (fuzz !== undefined) {
-			if (fuzz === 0) {
-				return { newIndex: index, fuzz };
+		const quality = linesEqualFuzz({ left: lines.slice(index, index + context.length), right: context });
+		if (quality !== undefined) {
+			if (quality.fuzz === 0) {
+				return { newIndex: index, fuzz: quality.fuzz };
 			}
-			if (fuzz < bestFuzz) {
+			if (quality.worstLineFuzz < bestWorstLineFuzz || (quality.worstLineFuzz === bestWorstLineFuzz && quality.fuzz < bestFuzz)) {
 				bestIndex = index;
-				bestFuzz = fuzz;
+				bestFuzz = quality.fuzz;
+				bestWorstLineFuzz = quality.worstLineFuzz;
 			}
 		}
 	}

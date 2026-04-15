@@ -307,6 +307,37 @@ test("executePatch prefers a later exact context match over an earlier fuzzy one
 	}
 });
 
+test("executePatch prefers trimEnd-only context matches over trim-level matches for insertion hunks", async () => {
+	const cwd = mkdtempSync(join(tmpdir(), "pi-codex-conversion-"));
+	try {
+		const context = Array.from({ length: 101 }, (_, index) => `ctx${index}`);
+		const earlierTrimLevelMatch = [...context];
+		earlierTrimLevelMatch[50] = "  ctx50";
+		const laterTrimEndMatch = context.map((line) => `${line}   `);
+
+		writeFileSync(join(cwd, "targets.txt"), ["before-trim", ...earlierTrimLevelMatch, "between", ...laterTrimEndMatch, "after"].join("\n") + "\n", "utf8");
+
+		const result = executePatch({
+			cwd,
+			patchText: `*** Begin Patch
+*** Update File: targets.txt
+@@
+ ${context.slice(0, 50).join("\n ")}
++inserted
+ ${context.slice(50).join("\n ")}
+*** End Patch`,
+		});
+
+		assert.equal(result.fuzz, 101);
+		assert.equal(
+			readFileSync(join(cwd, "targets.txt"), "utf8"),
+			["before-trim", ...earlierTrimLevelMatch, "between", ...laterTrimEndMatch.slice(0, 50), "inserted", ...laterTrimEndMatch.slice(50), "after"].join("\n") + "\n",
+		);
+	} finally {
+		await rm(cwd, { recursive: true, force: true });
+	}
+});
+
 test("executePatch reports partial move side effects when unlink fails after writing the destination", async () => {
 	const cwd = mkdtempSync(join(tmpdir(), "pi-codex-conversion-"));
 	const sourcePath = join(cwd, "source.txt");
