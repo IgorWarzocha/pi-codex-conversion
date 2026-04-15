@@ -338,6 +338,49 @@ test("executePatch prefers trimEnd-only context matches over trim-level matches 
 	}
 });
 
+test("executePatch prefers trimEnd-only section anchors over trim-level anchors", async () => {
+	const cwd = mkdtempSync(join(tmpdir(), "pi-codex-conversion-"));
+	try {
+		writeFileSync(
+			join(cwd, "module.py"),
+			[
+				"class Wrapper:",
+				"    def foo():",
+				"        pass",
+				"",
+				"def foo():   ",
+				"    pass",
+			].join("\n") + "\n",
+			"utf8",
+		);
+
+		const result = executePatch({
+			cwd,
+			patchText: `*** Begin Patch
+*** Update File: module.py
+@@ def foo():
++    inserted = True
+*** End Patch`,
+		});
+
+		assert.equal(result.fuzz, 1);
+		assert.equal(
+			readFileSync(join(cwd, "module.py"), "utf8"),
+			[
+				"class Wrapper:",
+				"    def foo():",
+				"        pass",
+				"",
+				"def foo():   ",
+				"    inserted = True",
+				"    pass",
+			].join("\n") + "\n",
+		);
+	} finally {
+		await rm(cwd, { recursive: true, force: true });
+	}
+});
+
 test("executePatch reports partial move side effects when unlink fails after writing the destination", async () => {
 	const cwd = mkdtempSync(join(tmpdir(), "pi-codex-conversion-"));
 	const sourcePath = join(cwd, "source.txt");

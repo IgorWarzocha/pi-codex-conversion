@@ -187,12 +187,24 @@ function uniqueStrings(values: Array<string | undefined>): string[] {
 	return Array.from(new Set(values.filter((value): value is string => typeof value === "string" && value.length > 0)));
 }
 
-function buildPartialFailureMessage(message: string, failedTarget: string | undefined, result: ExecutePatchResult): string {
-	const failedFiles = uniqueStrings([failedTarget]);
-	const appliedFiles = result.changedFiles.filter((path) => !failedFiles.includes(path));
+function getFailedPaths(error: ExecutePatchError): string[] {
+	if (!error.failedAction) {
+		return [];
+	}
+	return uniqueStrings([
+		error.failedAction.path,
+		error.failedAction.type === "update" ? error.failedAction.movePath : undefined,
+	]);
+}
+
+function getAppliedPaths(result: ExecutePatchResult, failedFiles: string[]): string[] {
+	return result.changedFiles.filter((path) => !failedFiles.includes(path));
+}
+
+function buildPartialFailureMessage(message: string, failedFiles: string[], appliedFiles: string[]): string {
 	const lines = [message];
 	if (failedFiles.length > 0) {
-		lines.push(`Failed file: ${failedFiles.join(", ")}`);
+		lines.push(`Failed file${failedFiles.length === 1 ? "" : "s"}: ${failedFiles.join(", ")}`);
 		lines.push(`Recovery: MUST read ${failedFiles.join(", ")} before retrying.`);
 	}
 	if (appliedFiles.length > 0) {
@@ -278,9 +290,9 @@ export function registerApplyPatchTool(pi: ExtensionAPI): void {
 						: "apply_patch failed";
 					const message = failedTarget ? `${prefix} while patching ${failedTarget}: ${error.message}` : `${prefix}: ${error.message}`;
 					if (partial) {
-						const failedFiles = uniqueStrings([failedTarget]);
-						const appliedFiles = error.result.changedFiles.filter((path) => !failedFiles.includes(path));
-						const recoveryMessage = buildPartialFailureMessage(message, failedTarget, error.result);
+						const failedFiles = getFailedPaths(error);
+						const appliedFiles = getAppliedPaths(error.result, failedFiles);
+						const recoveryMessage = buildPartialFailureMessage(message, failedFiles, appliedFiles);
 						markApplyPatchPartialFailure(toolCallId, failedTarget);
 						return {
 							content: [{ type: "text", text: recoveryMessage }],

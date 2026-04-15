@@ -1,4 +1,4 @@
-import { linesEqualFuzz } from "./matching.ts";
+import { lineMatchFuzz, linesEqualFuzz } from "./matching.ts";
 import { normalizePatchPath } from "./paths.ts";
 import { DiffError, type Chunk, type ParseMode, type ParsedPatchAction, type ParserState, type PatchAction } from "./types.ts";
 
@@ -72,6 +72,31 @@ function findContextCore({ lines, context, start }: { lines: string[]; context: 
 				bestFuzz = quality.fuzz;
 				bestWorstLineFuzz = quality.worstLineFuzz;
 			}
+		}
+	}
+
+	if (bestIndex !== -1) {
+		return { newIndex: bestIndex, fuzz: bestFuzz };
+	}
+
+	return { newIndex: -1, fuzz: 0 };
+}
+
+function findSectionAnchor({ lines, target, start }: { lines: string[]; target: string; start: number }): { newIndex: number; fuzz: number } {
+	let bestIndex = -1;
+	let bestFuzz = Number.POSITIVE_INFINITY;
+
+	for (let index = start; index < lines.length; index++) {
+		const fuzz = lineMatchFuzz(lines[index], target);
+		if (fuzz === undefined) {
+			continue;
+		}
+		if (fuzz === 0) {
+			return { newIndex: index, fuzz };
+		}
+		if (fuzz < bestFuzz) {
+			bestIndex = index;
+			bestFuzz = fuzz;
 		}
 	}
 
@@ -256,30 +281,10 @@ export function parseUpdateFile({ state, text, path }: { state: ParserState; tex
 		}
 
 		if (defStr.trim().length > 0) {
-			let found = false;
-
-			const exactAlreadySeen = lines.slice(0, index).some((line) => line === defStr);
-			if (!exactAlreadySeen) {
-				for (let lineIndex = index; lineIndex < lines.length; lineIndex++) {
-					if (lines[lineIndex] === defStr) {
-						index = lineIndex + 1;
-						found = true;
-						break;
-					}
-				}
-			}
-
-			if (!found) {
-				const trimAlreadySeen = lines.slice(0, index).some((line) => line.trim() === defStr.trim());
-				if (!trimAlreadySeen) {
-					for (let lineIndex = index; lineIndex < lines.length; lineIndex++) {
-						if (lines[lineIndex].trim() === defStr.trim()) {
-							index = lineIndex + 1;
-							state.fuzz += 1;
-							break;
-						}
-					}
-				}
+			const sectionAnchor = findSectionAnchor({ lines, target: defStr, start: index });
+			if (sectionAnchor.newIndex !== -1) {
+				index = sectionAnchor.newIndex + 1;
+				state.fuzz += sectionAnchor.fuzz;
 			}
 		}
 

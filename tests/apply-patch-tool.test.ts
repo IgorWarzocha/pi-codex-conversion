@@ -318,6 +318,52 @@ test("apply_patch renderCall preserves the original preview for runtime partial 
 	}
 });
 
+test("apply_patch partial move failures report real paths and no prior-action warning", async () => {
+	const cwd = mkdtempSync(join(tmpdir(), "pi-codex-conversion-"));
+	const sourcePath = join(cwd, "source.txt");
+	const { pi, getTool } = createRegisteredTool();
+	registerApplyPatchTool(pi);
+	const originalUnlinkSync = patchFsOps.unlinkSync;
+
+	try {
+		writeFileSync(sourcePath, "from\n", "utf8");
+		patchFsOps.unlinkSync = (path) => {
+			if (String(path) === sourcePath) {
+				throw new Error("mock unlink failure");
+			}
+			return originalUnlinkSync(path);
+		};
+		const patch = `*** Begin Patch
+*** Update File: source.txt
+*** Move to: moved/source.txt
+@@
+-from
++to
+*** End Patch`;
+		const result = (await getTool().execute?.("call-move-partial-failure", { input: patch }, undefined, undefined, { cwd })) as {
+			content: Array<{ type: string; text?: string }>;
+			details?: {
+				failedFiles?: string[];
+				appliedFiles?: string[];
+				recoveryInstructions?: { mustReadFiles?: string[]; mustNotReadFiles?: string[] };
+			};
+		};
+
+		assert.match(result.content[0]?.text ?? "", /while patching source\.txt → moved\/source\.txt/i);
+		assert.match(result.content[0]?.text ?? "", /Failed files: source\.txt, moved\/source\.txt/i);
+		assert.match(result.content[0]?.text ?? "", /MUST read source\.txt, moved\/source\.txt before retrying\./i);
+		assert.doesNotMatch(result.content[0]?.text ?? "", /Earlier file actions in this patch were already applied\./i);
+		assert.deepEqual(result.details?.failedFiles, ["source.txt", "moved/source.txt"]);
+		assert.deepEqual(result.details?.appliedFiles, []);
+		assert.deepEqual(result.details?.recoveryInstructions?.mustReadFiles, ["source.txt", "moved/source.txt"]);
+		assert.deepEqual(result.details?.recoveryInstructions?.mustNotReadFiles, []);
+	} finally {
+		patchFsOps.unlinkSync = originalUnlinkSync;
+		clearApplyPatchRenderState();
+		await rm(cwd, { recursive: true, force: true });
+	}
+});
+
 test("apply_patch renderCall marks single-file partial failures after warning styling", async () => {
 	const cwd = mkdtempSync(join(tmpdir(), "pi-codex-conversion-"));
 	const sourcePath = join(cwd, "source.txt");
