@@ -10,6 +10,22 @@ export const patchFsOps = {
 	unlinkSync: fs.unlinkSync,
 };
 
+function normalizeUnicode(text: string): string {
+	return text
+		.replace(/[‘’‚‛]/g, "'")
+		.replace(/[“”„‟]/g, '"')
+		.replace(/[‐‑‒–—―−]/g, "-")
+		.replace(/…/g, "...")
+		.replace(/[            　]/g, " ");
+}
+
+function linesMatch(left: string, right: string): boolean {
+	if (left === right) return true;
+	if (left.trimEnd() === right.trimEnd()) return true;
+	if (left.trim() === right.trim()) return true;
+	return normalizeUnicode(left).trim().toLowerCase() === normalizeUnicode(right).trim().toLowerCase();
+}
+
 function buildExecutePatchResult({
 	changedFiles,
 	createdFiles,
@@ -64,7 +80,7 @@ function getUpdatedFile({ text, action, path }: { text: string; action: PatchAct
 		destIndex += delta;
 
 		for (const line of chunk.delLines) {
-			if (origLines[origIndex] !== line) {
+			if (!linesMatch(origLines[origIndex] ?? "", line)) {
 				throw new DiffError(`_get_updated_file: ${path}: Expected ${line} but got ${origLines[origIndex]} at line ${origIndex + 1}`);
 			}
 			origIndex += 1;

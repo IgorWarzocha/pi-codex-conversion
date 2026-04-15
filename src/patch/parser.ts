@@ -1,6 +1,23 @@
 import { normalizePatchPath } from "./paths.ts";
 import { DiffError, type Chunk, type ParseMode, type ParsedPatchAction, type ParserState, type PatchAction } from "./types.ts";
 
+function normalizeUnicode(text: string): string {
+	return text
+		.replace(/[\u2018\u2019\u201A\u201B]/g, "'")
+		.replace(/[\u201C\u201D\u201E\u201F]/g, '"')
+		.replace(/[\u2010\u2011\u2012\u2013\u2014\u2015\u2212]/g, "-")
+		.replace(/\u2026/g, "...")
+		.replace(/[\u00A0\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200A\u202F\u205F\u3000]/g, " ");
+}
+
+function lineMatchFuzz(left: string, right: string): number | undefined {
+	if (left === right) return 0;
+	if (left.trimEnd() === right.trimEnd()) return 1;
+	if (left.trim() === right.trim()) return 100;
+	if (normalizeUnicode(left).trim().toLowerCase() === normalizeUnicode(right).trim().toLowerCase()) return 1000;
+	return undefined;
+}
+
 function parserIsDone({ state, prefixes }: { state: ParserState; prefixes?: string[] }): boolean {
 	if (state.index >= state.lines.length) {
 		return true;
@@ -48,12 +65,15 @@ function splitFileLines(text: string): string[] {
 	return lines;
 }
 
-function linesEqual({ left, right }: { left: string[]; right: string[] }): boolean {
-	if (left.length !== right.length) return false;
+function linesEqualFuzz({ left, right }: { left: string[]; right: string[] }): number | undefined {
+	if (left.length !== right.length) return undefined;
+	let fuzz = 0;
 	for (let index = 0; index < left.length; index++) {
-		if (left[index] !== right[index]) return false;
+		const lineFuzz = lineMatchFuzz(left[index], right[index]);
+		if (lineFuzz === undefined) return undefined;
+		fuzz += lineFuzz;
 	}
-	return true;
+	return fuzz;
 }
 
 function findContextCore({ lines, context, start }: { lines: string[]; context: string[]; start: number }): {
@@ -64,25 +84,10 @@ function findContextCore({ lines, context, start }: { lines: string[]; context: 
 		return { newIndex: start, fuzz: 0 };
 	}
 
-	for (let index = start; index < lines.length; index++) {
-		if (linesEqual({ left: lines.slice(index, index + context.length), right: context })) {
-			return { newIndex: index, fuzz: 0 };
-		}
-	}
-
-	for (let index = start; index < lines.length; index++) {
-		const left = lines.slice(index, index + context.length).map((line) => line.trimEnd());
-		const right = context.map((line) => line.trimEnd());
-		if (linesEqual({ left, right })) {
-			return { newIndex: index, fuzz: 1 };
-		}
-	}
-
-	for (let index = start; index < lines.length; index++) {
-		const left = lines.slice(index, index + context.length).map((line) => line.trim());
-		const right = context.map((line) => line.trim());
-		if (linesEqual({ left, right })) {
-			return { newIndex: index, fuzz: 100 };
+	for (let index = start; index <= lines.length - context.length; index++) {
+		const fuzz = linesEqualFuzz({ left: lines.slice(index, index + context.length), right: context });
+		if (fuzz !== undefined) {
+			return { newIndex: index, fuzz };
 		}
 	}
 

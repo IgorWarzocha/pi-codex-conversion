@@ -168,7 +168,8 @@ test("apply_patch renderCall shows partial failure inline after some hunks alrea
 		assert.equal(result.content[0]?.type, "text");
 		assert.match(result.content[0]?.text ?? "", /partially failed/i);
 		assert.match(result.content[0]?.text ?? "", /MUST read missing\.txt before retrying\./);
-		assert.match(result.content[0]?.text ?? "", /MUST NOT reread created\.txt unless a specific dependency requires it\./);
+		assert.match(result.content[0]?.text ?? "", /Earlier file actions in this patch were already applied\./);
+		assert.match(result.content[0]?.text ?? "", /MUST NOT reread other files from this patch unless a specific dependency requires it\./);
 		assert.deepEqual(result.details?.failedFiles, ["missing.txt"]);
 		assert.deepEqual(result.details?.appliedFiles, ["created.txt"]);
 		assert.deepEqual(result.details?.recoveryInstructions?.mustReadFiles, ["missing.txt"]);
@@ -268,20 +269,28 @@ test("apply_patch renderCall only marks the exact failed entry inline", async ()
 	}
 });
 
-test("apply_patch renderCall preserves the original preview for partial failures", async () => {
+test("apply_patch renderCall preserves the original preview for runtime partial failures", async () => {
 	const cwd = mkdtempSync(join(tmpdir(), "pi-codex-conversion-"));
+	const sourcePath = join(cwd, "source.txt");
 	const { pi, getTool } = createRegisteredTool();
 	registerApplyPatchTool(pi);
 	const theme = createTheme();
+	const originalUnlinkSync = patchFsOps.unlinkSync;
 
 	try {
-		writeFileSync(join(cwd, "delete-me.txt"), "first\nsecond\n", "utf8");
+		writeFileSync(sourcePath, "from\n", "utf8");
+		patchFsOps.unlinkSync = (path) => {
+			if (String(path) === sourcePath) {
+				throw new Error("mock unlink failure");
+			}
+			return originalUnlinkSync(path);
+		};
 		const patch = `*** Begin Patch
-*** Delete File: delete-me.txt
-*** Update File: missing.txt
+*** Update File: source.txt
+*** Move to: moved/source.txt
 @@
--old
-+new
+-from
++to
 *** End Patch`;
 		const tool = getTool();
 		const execute = tool.execute;
@@ -289,17 +298,21 @@ test("apply_patch renderCall preserves the original preview for partial failures
 		assert.ok(execute);
 		assert.ok(renderCall);
 
-		await execute("call-preview-partial-failure", { input: patch }, undefined, undefined, { cwd });
+		try {
+			await execute("call-preview-partial-failure", { input: patch }, undefined, undefined, { cwd });
+		} finally {
+			patchFsOps.unlinkSync = originalUnlinkSync;
+		}
 
 		const expanded = renderComponentText(
 			renderCall({ input: patch }, theme, { toolCallId: "call-preview-partial-failure", expanded: true, cwd }),
 		);
 
-		assert.match(expanded, /delete-me\.txt \(\+0 -2\)/);
-		assert.match(expanded, /-first/);
-		assert.match(expanded, /-second/);
-		assert.match(expanded, /missing\.txt failed \(\+1 -1\)/);
+		assert.match(expanded, /source\.txt → moved\/source\.txt failed \(\+1 -1\)/);
+		assert.match(expanded, /-from/);
+		assert.match(expanded, /\+to/);
 	} finally {
+		patchFsOps.unlinkSync = originalUnlinkSync;
 		clearApplyPatchRenderState();
 		await rm(cwd, { recursive: true, force: true });
 	}

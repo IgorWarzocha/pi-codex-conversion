@@ -196,8 +196,8 @@ function buildPartialFailureMessage(message: string, failedTarget: string | unde
 		lines.push(`Recovery: MUST read ${failedFiles.join(", ")} before retrying.`);
 	}
 	if (appliedFiles.length > 0) {
-		lines.push(`Applied files: ${appliedFiles.join(", ")}`);
-		lines.push(`Recovery: MUST NOT reread ${appliedFiles.join(", ")} unless a specific dependency requires it.`);
+		lines.push("Earlier file actions in this patch were already applied.");
+		lines.push("Recovery: MUST NOT reread other files from this patch unless a specific dependency requires it.");
 	}
 	return lines.join("\n");
 }

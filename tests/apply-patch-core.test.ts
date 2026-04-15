@@ -196,6 +196,37 @@ test("executePatch leaves earlier changes applied when a later hunk fails", asyn
 	}
 });
 
+test("executePatch applies multi-file updates despite whitespace drift in matched lines", async () => {
+	const cwd = mkdtempSync(join(tmpdir(), "pi-codex-conversion-"));
+	try {
+		writeFileSync(join(cwd, "alpha.txt"), "old line   \nkeep line\n", "utf8");
+		writeFileSync(join(cwd, "beta.txt"), "first value\nsecond value   \n", "utf8");
+
+		const result = executePatch({
+			cwd,
+			patchText: `*** Begin Patch
+*** Update File: alpha.txt
+@@
+-old line
++new line
+ keep line
+*** Update File: beta.txt
+@@
+ first value
+-second value
++second value updated
+*** End Patch`,
+		});
+
+		assert.deepEqual(result.changedFiles.sort(), ["alpha.txt", "beta.txt"]);
+		assert.equal(readFileSync(join(cwd, "alpha.txt"), "utf8"), "new line\nkeep line\n");
+		assert.equal(readFileSync(join(cwd, "beta.txt"), "utf8"), "first value\nsecond value updated\n");
+		assert.ok(result.fuzz > 0);
+	} finally {
+		await rm(cwd, { recursive: true, force: true });
+	}
+});
+
 test("executePatch reports partial move side effects when unlink fails after writing the destination", async () => {
 	const cwd = mkdtempSync(join(tmpdir(), "pi-codex-conversion-"));
 	const sourcePath = join(cwd, "source.txt");

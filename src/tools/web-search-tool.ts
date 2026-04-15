@@ -5,7 +5,7 @@ import { isOpenAICodexModel } from "../adapter/codex-model.ts";
 
 export const WEB_SEARCH_UNSUPPORTED_MESSAGE = "web_search is only available with the openai-codex provider";
 const WEB_SEARCH_LOCAL_EXECUTION_MESSAGE =
-	"web_search is a native openai-codex provider tool and should not execute locally";
+	"web_search is a native openai-codex provider tool and SHOULD NOT execute locally";
 export const WEB_SEARCH_SESSION_NOTE_TYPE = "codex-web-search-session-note";
 export const WEB_SEARCH_SESSION_NOTE_TEXT =
 	"Native OpenAI Codex web search is enabled for this session. Search runs silently and is not surfaced as a separate tool call.";
