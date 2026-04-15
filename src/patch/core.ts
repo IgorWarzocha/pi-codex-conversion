@@ -218,6 +218,10 @@ function applyAction({
 	return fuzz;
 }
 
+function getActionPaths(action: ParsedPatchAction): string[] {
+	return [action.path, action.type === "update" ? action.movePath : undefined].filter((path): path is string => typeof path === "string");
+}
+
 export function executePatch({ cwd, patchText }: { cwd: string; patchText: string }): ExecutePatchResult {
 	if (!patchText.startsWith("*** Begin Patch")) {
 		throw new DiffError("Patch must start with '*** Begin Patch'");
@@ -228,10 +232,21 @@ export function executePatch({ cwd, patchText }: { cwd: string; patchText: strin
 	const createdFiles = new Set<string>();
 	const deletedFiles = new Set<string>();
 	const movedFiles = new Set<string>();
+	const blockedPaths = new Set<string>();
 	const failures: ExecutePatchFailure[] = [];
 	let fuzz = 0;
 
 	for (const action of actions) {
+		const actionPaths = getActionPaths(action);
+		const overlappingPaths = actionPaths.filter((path) => blockedPaths.has(path));
+		if (overlappingPaths.length > 0) {
+			failures.push({
+				action,
+				message: `Skipped because an earlier failed action affected ${overlappingPaths.join(", ")}`,
+			});
+			continue;
+		}
+
 		try {
 			fuzz += applyAction({
 				cwd,
@@ -243,6 +258,9 @@ export function executePatch({ cwd, patchText }: { cwd: string; patchText: strin
 			});
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
+			for (const path of actionPaths) {
+				blockedPaths.add(path);
+			}
 			failures.push({ action, message });
 		}
 	}
