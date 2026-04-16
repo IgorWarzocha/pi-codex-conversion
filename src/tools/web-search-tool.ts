@@ -106,6 +106,7 @@ export function createWebSearchTool(): ToolDefinition<typeof WEB_SEARCH_PARAMETE
 		promptSnippet:
 			"Search the web for sources relevant to the current task. Use it when you need up-to-date information, external references, or broader context beyond the workspace.",
 		parameters: WEB_SEARCH_PARAMETERS,
+		prepareArguments: () => ({}),
 		async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
 			if (!supportsNativeWebSearch(ctx.model)) {
 				throw new Error(WEB_SEARCH_UNSUPPORTED_MESSAGE);

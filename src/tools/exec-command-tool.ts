@@ -30,6 +30,26 @@ interface ExecCommandParams {
 	login?: boolean;
 }
 
+function prepareExecCommandArguments(args: unknown): ExecCommandParams {
+	if (!args || typeof args !== "object") {
+		return args as ExecCommandParams;
+	}
+
+	const record = args as Record<string, unknown>;
+	const prepared: Record<string, unknown> = { ...record };
+	if (!("cmd" in prepared) && "command" in prepared) {
+		prepared.cmd = prepared.command;
+	}
+	if (!("workdir" in prepared)) {
+		if ("cwd" in prepared) {
+			prepared.workdir = prepared.cwd;
+		} else if ("working_directory" in prepared) {
+			prepared.workdir = prepared.working_directory;
+		}
+	}
+	return prepared as unknown as ExecCommandParams;
+}
+
 function parseExecCommandParams(params: unknown): ExecCommandParams {
 	if (!params || typeof params !== "object") {
 		throw new Error("exec_command requires an object parameter");
@@ -125,6 +145,7 @@ export function registerExecCommandTool(pi: ExtensionAPI, tracker: ExecCommandTr
 			"Keep tty disabled unless the command truly needs interactive terminal behavior.",
 		],
 		parameters: EXEC_COMMAND_PARAMETERS,
+		prepareArguments: prepareExecCommandArguments,
 		async execute(toolCallId, params, signal, _onUpdate, ctx) {
 			if (signal?.aborted) {
 				throw new Error("exec_command aborted");

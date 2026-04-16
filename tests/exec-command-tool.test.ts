@@ -21,6 +21,7 @@ function createRegisteredTool() {
 		renderCall?: (args: { cmd?: string }, theme: ReturnType<typeof createTheme>, context?: { toolCallId?: string; invalidate?: () => void }) => {
 			render(width: number): string[];
 		};
+		prepareArguments?: (args: unknown) => Record<string, unknown>;
 		renderResult?: (
 			result: { content: Array<{ type: string; text?: string }>; details?: unknown },
 			options: { expanded: boolean; isPartial: boolean },
@@ -41,6 +42,41 @@ function createRegisteredTool() {
 		},
 	};
 }
+
+test("exec_command prepareArguments normalizes common command aliases", () => {
+	const tracker = createExecCommandTracker();
+	const sessions = createExecSessionManager();
+	const { pi, getTool } = createRegisteredTool();
+	registerExecCommandTool(pi, tracker, sessions);
+
+	try {
+		assert.deepEqual(getTool().prepareArguments?.({ command: "pwd", cwd: "/tmp" }), {
+			cmd: "pwd",
+			command: "pwd",
+			cwd: "/tmp",
+			workdir: "/tmp",
+		});
+	} finally {
+		sessions.shutdown();
+	}
+});
+
+test("exec_command prepareArguments preserves invalid optional field types for validation", () => {
+	const tracker = createExecCommandTracker();
+	const sessions = createExecSessionManager();
+	const { pi, getTool } = createRegisteredTool();
+	registerExecCommandTool(pi, tracker, sessions);
+
+	try {
+		assert.deepEqual(getTool().prepareArguments?.({ cmd: "ls", tty: "true", yield_time_ms: "1000" }), {
+			cmd: "ls",
+			tty: "true",
+			yield_time_ms: "1000",
+		});
+	} finally {
+		sessions.shutdown();
+	}
+});
 
 test("exec_command renderResult returns an empty component for collapsed or partial states", () => {
 	const tracker = createExecCommandTracker();

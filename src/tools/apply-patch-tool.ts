@@ -56,6 +56,21 @@ function parseApplyPatchParams(params: unknown): { patchText: string } {
 	return { patchText: params.input };
 }
 
+function prepareApplyPatchArguments(args: unknown): { input: string } {
+	if (args && typeof args === "object") {
+		if ("input" in args && typeof args.input === "string") {
+			return { input: args.input };
+		}
+		if ("patchText" in args && typeof args.patchText === "string") {
+			return { input: args.patchText };
+		}
+		if ("patch" in args && typeof args.patch === "string") {
+			return { input: args.patch };
+		}
+	}
+	return args as { input: string };
+}
+
 function isApplyPatchToolDetails(details: unknown): details is ApplyPatchToolDetails {
 	return typeof details === "object" && details !== null && "status" in details && "result" in details;
 }
@@ -272,6 +287,8 @@ export function registerApplyPatchTool(pi: ExtensionAPI): void {
 			"When one task needs coordinated edits across multiple files, send them in a single apply_patch call when one coherent patch will do.",
 		],
 		parameters: APPLY_PATCH_PARAMETERS,
+		renderShell: "self",
+		prepareArguments: prepareApplyPatchArguments,
 		async execute(toolCallId, params, signal, _onUpdate, ctx) {
 			if (signal?.aborted) {
 				throw new Error("apply_patch aborted");

@@ -68,6 +68,23 @@ export function parseViewImageParams(params: unknown): ViewImageParams {
 	return { path: params.path, detail };
 }
 
+function prepareViewImageArguments(args: unknown): Record<string, unknown> {
+	if (!args || typeof args !== "object") {
+		return args as Record<string, unknown>;
+	}
+
+	const record = args as Record<string, unknown>;
+	const prepared: Record<string, unknown> = { ...record };
+	if (!("path" in prepared)) {
+		if ("file_path" in prepared) {
+			prepared.path = prepared.file_path;
+		} else if ("image_path" in prepared) {
+			prepared.path = prepared.image_path;
+		}
+	}
+	return prepared;
+}
+
 function resolveViewImagePath(path: string, cwd: string): string {
 	return isAbsolute(path) ? path : resolve(cwd, path);
 }
@@ -131,6 +148,7 @@ export function createViewImageTool(options: CreateViewImageToolOptions = {}): T
 		promptSnippet: "View a local image from the filesystem.",
 		promptGuidelines: ["Use view_image only for image files. Use exec_command for text-file inspection."],
 		parameters,
+		prepareArguments: prepareViewImageArguments,
 		async execute(toolCallId, params, signal, _onUpdate, ctx) {
 			if (!supportsImageInputs(ctx.model)) {
 				throw new Error(VIEW_IMAGE_UNSUPPORTED_MESSAGE);

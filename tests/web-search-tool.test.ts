@@ -122,6 +122,7 @@ test("createWebSearchTool exposes a strict zero-argument schema and agent-facing
 	assert.equal((tool.parameters as { type?: unknown }).type, "object");
 	assert.equal((tool.parameters as { additionalProperties?: unknown }).additionalProperties, false);
 	assert.equal("properties" in (tool.parameters as object), false);
+	assert.deepEqual(tool.prepareArguments?.({ q: "ignored" }), {});
 });
 
 test("createWebSearchTool renderResult returns an empty component when collapsed", () => {
@@ -136,6 +137,7 @@ test("createWebSearchTool renderResult returns an empty component when collapsed
 			fg: (_role: string, text: string) => text,
 			bold: (text: string) => text,
 		} as never,
+		{} as never,
 	);
 
 	assert.ok(component);

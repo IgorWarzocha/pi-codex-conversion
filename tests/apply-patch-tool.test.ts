@@ -50,6 +50,8 @@ function createRegisteredTool() {
 					options: { expanded: boolean; isPartial: boolean },
 					theme: ReturnType<typeof createTheme>,
 				) => { render(width: number): string[] };
+				renderShell?: "default" | "self";
+				prepareArguments?: (args: unknown) => { input: string };
 		  }
 		| undefined;
 	const pi = {
@@ -65,6 +67,25 @@ function createRegisteredTool() {
 		},
 	};
 }
+
+test("apply_patch registers self-rendered shell for stable latest-Pi previews", () => {
+	const { pi, getTool } = createRegisteredTool();
+	registerApplyPatchTool(pi);
+
+	assert.equal(getTool().renderShell, "self");
+});
+
+test("apply_patch prepareArguments accepts legacy patch aliases", () => {
+	const { pi, getTool } = createRegisteredTool();
+	registerApplyPatchTool(pi);
+
+	assert.deepEqual(getTool().prepareArguments?.({ patchText: "*** Begin Patch\n*** End Patch" }), {
+		input: "*** Begin Patch\n*** End Patch",
+	});
+	assert.deepEqual(getTool().prepareArguments?.({ patch: "*** Begin Patch\n*** End Patch" }), {
+		input: "*** Begin Patch\n*** End Patch",
+	});
+});
 
 test("apply_patch renderCall preserves deleted previews after execution removes the file", async () => {
 	const cwd = mkdtempSync(join(tmpdir(), "pi-codex-conversion-"));
