@@ -74,16 +74,15 @@ function prepareViewImageArguments(args: unknown): Record<string, unknown> {
 	}
 
 	const record = args as Record<string, unknown>;
-	const path =
-		typeof record.path === "string"
-			? record.path
-			: typeof record.file_path === "string"
-				? record.file_path
-				: typeof record.image_path === "string"
-					? record.image_path
-					: (record.path as string);
-	const detail = typeof record.detail === "string" || record.detail == null ? record.detail : undefined;
-	return detail == null ? { path } : { path, detail };
+	const prepared: Record<string, unknown> = { ...record };
+	if (!("path" in prepared)) {
+		if ("file_path" in prepared) {
+			prepared.path = prepared.file_path;
+		} else if ("image_path" in prepared) {
+			prepared.path = prepared.image_path;
+		}
+	}
+	return prepared;
 }
 
 function resolveViewImagePath(path: string, cwd: string): string {

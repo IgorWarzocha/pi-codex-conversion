@@ -52,12 +52,26 @@ test("exec_command prepareArguments normalizes common command aliases", () => {
 	try {
 		assert.deepEqual(getTool().prepareArguments?.({ command: "pwd", cwd: "/tmp" }), {
 			cmd: "pwd",
+			command: "pwd",
+			cwd: "/tmp",
 			workdir: "/tmp",
-			shell: undefined,
-			tty: undefined,
-			yield_time_ms: undefined,
-			max_output_tokens: undefined,
-			login: undefined,
+		});
+	} finally {
+		sessions.shutdown();
+	}
+});
+
+test("exec_command prepareArguments preserves invalid optional field types for validation", () => {
+	const tracker = createExecCommandTracker();
+	const sessions = createExecSessionManager();
+	const { pi, getTool } = createRegisteredTool();
+	registerExecCommandTool(pi, tracker, sessions);
+
+	try {
+		assert.deepEqual(getTool().prepareArguments?.({ cmd: "ls", tty: "true", yield_time_ms: "1000" }), {
+			cmd: "ls",
+			tty: "true",
+			yield_time_ms: "1000",
 		});
 	} finally {
 		sessions.shutdown();

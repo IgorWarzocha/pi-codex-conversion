@@ -36,22 +36,18 @@ function prepareExecCommandArguments(args: unknown): ExecCommandParams {
 	}
 
 	const record = args as Record<string, unknown>;
-	return {
-		cmd: typeof record.cmd === "string" ? record.cmd : typeof record.command === "string" ? record.command : (record.cmd as string),
-		workdir:
-			typeof record.workdir === "string"
-				? record.workdir
-				: typeof record.cwd === "string"
-					? record.cwd
-					: typeof record.working_directory === "string"
-						? record.working_directory
-						: undefined,
-		shell: typeof record.shell === "string" ? record.shell : undefined,
-		tty: typeof record.tty === "boolean" ? record.tty : undefined,
-		yield_time_ms: typeof record.yield_time_ms === "number" ? record.yield_time_ms : undefined,
-		max_output_tokens: typeof record.max_output_tokens === "number" ? record.max_output_tokens : undefined,
-		login: typeof record.login === "boolean" ? record.login : undefined,
-	};
+	const prepared: Record<string, unknown> = { ...record };
+	if (!("cmd" in prepared) && "command" in prepared) {
+		prepared.cmd = prepared.command;
+	}
+	if (!("workdir" in prepared)) {
+		if ("cwd" in prepared) {
+			prepared.workdir = prepared.cwd;
+		} else if ("working_directory" in prepared) {
+			prepared.workdir = prepared.working_directory;
+		}
+	}
+	return prepared as unknown as ExecCommandParams;
 }
 
 function parseExecCommandParams(params: unknown): ExecCommandParams {
