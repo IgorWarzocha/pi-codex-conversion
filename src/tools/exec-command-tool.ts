@@ -30,6 +30,30 @@ interface ExecCommandParams {
 	login?: boolean;
 }
 
+function prepareExecCommandArguments(args: unknown): ExecCommandParams {
+	if (!args || typeof args !== "object") {
+		return args as ExecCommandParams;
+	}
+
+	const record = args as Record<string, unknown>;
+	return {
+		cmd: typeof record.cmd === "string" ? record.cmd : typeof record.command === "string" ? record.command : (record.cmd as string),
+		workdir:
+			typeof record.workdir === "string"
+				? record.workdir
+				: typeof record.cwd === "string"
+					? record.cwd
+					: typeof record.working_directory === "string"
+						? record.working_directory
+						: undefined,
+		shell: typeof record.shell === "string" ? record.shell : undefined,
+		tty: typeof record.tty === "boolean" ? record.tty : undefined,
+		yield_time_ms: typeof record.yield_time_ms === "number" ? record.yield_time_ms : undefined,
+		max_output_tokens: typeof record.max_output_tokens === "number" ? record.max_output_tokens : undefined,
+		login: typeof record.login === "boolean" ? record.login : undefined,
+	};
+}
+
 function parseExecCommandParams(params: unknown): ExecCommandParams {
 	if (!params || typeof params !== "object") {
 		throw new Error("exec_command requires an object parameter");
@@ -125,6 +149,7 @@ export function registerExecCommandTool(pi: ExtensionAPI, tracker: ExecCommandTr
 			"Keep tty disabled unless the command truly needs interactive terminal behavior.",
 		],
 		parameters: EXEC_COMMAND_PARAMETERS,
+		prepareArguments: prepareExecCommandArguments,
 		async execute(toolCallId, params, signal, _onUpdate, ctx) {
 			if (signal?.aborted) {
 				throw new Error("exec_command aborted");

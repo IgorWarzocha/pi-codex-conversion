@@ -42,6 +42,15 @@ test("parseViewImageParams accepts omitted and null detail, but rejects invalid 
 	assert.throws(() => parseViewImageParams({ path: "assets/example.png", detail: 1 }), /view_image\.detail must be a string/);
 });
 
+test("createViewImageTool prepareArguments normalizes alternate path field names", () => {
+	const tool = createViewImageTool({ allowOriginalDetail: true });
+
+	assert.deepEqual(tool.prepareArguments?.({ file_path: "image.png", detail: "original" }), {
+		path: "image.png",
+		detail: "original",
+	});
+});
+
 test("createViewImageTool uses resized reader by default and strips text output", async () => {
 	const cwd = await mkdtemp(join(tmpdir(), "view-image-tool-"));
 	const imagePath = join(cwd, "image.png");

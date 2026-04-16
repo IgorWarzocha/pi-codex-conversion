@@ -8,6 +8,7 @@ This package replaces Pi's default Codex/GPT experience with a narrower Codex-li
 - preserves Pi's composed system prompt and applies a narrow Codex-oriented delta on top
 - renders exec activity with Codex-style command and background-terminal labels
 - renders `apply_patch` calls with Codex-style `Added` / `Edited` / `Deleted` diff blocks and Pi-style colored diff lines
+- targets modern Pi tool/rendering APIs and is aligned with Pi `0.67.x`
 
 ![Available tools](./available-tools.png)
 
@@ -139,6 +140,7 @@ That keeps the prompt much closer to `pi-mono` while still steering the model to
 - `web_search` is exposed only for the `openai-codex` provider and is forwarded as the native OpenAI Codex Responses web search tool.
 - `apply_patch` paths stay restricted to the current working directory.
 - partial `apply_patch` failures stay in the original patch block and highlight the failed entry instead of adding a second warning row.
+- `apply_patch` uses Pi's self-rendered tool shell mode for more stable large patch previews on current Pi versions.
 - `exec_command` / `write_stdin` use a custom PTY-backed session manager via `node-pty` for interactive sessions.
 - tiny `exec_command` waits are clamped for non-interactive commands so short runs do not burn an avoidable follow-up tool call.
 - empty `write_stdin` polls are clamped to a meaningful minimum wait so long-running processes are not repolled too aggressively.
