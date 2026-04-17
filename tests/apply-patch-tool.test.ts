@@ -50,7 +50,6 @@ function createRegisteredTool() {
 					options: { expanded: boolean; isPartial: boolean },
 					theme: ReturnType<typeof createTheme>,
 				) => { render(width: number): string[] };
-				renderShell?: "default" | "self";
 				prepareArguments?: (args: unknown) => { input: string };
 		  }
 		| undefined;
@@ -68,11 +67,11 @@ function createRegisteredTool() {
 	};
 }
 
-test("apply_patch registers self-rendered shell for stable latest-Pi previews", () => {
+test("apply_patch uses Pi's default shell renderer", () => {
 	const { pi, getTool } = createRegisteredTool();
 	registerApplyPatchTool(pi);
 
-	assert.equal(getTool().renderShell, "self");
+	assert.equal("renderShell" in getTool(), false);
 });
 
 test("apply_patch prepareArguments accepts legacy patch aliases", () => {

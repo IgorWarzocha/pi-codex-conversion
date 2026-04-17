@@ -287,7 +287,6 @@ export function registerApplyPatchTool(pi: ExtensionAPI): void {
 			"When one task needs coordinated edits across multiple files, send them in a single apply_patch call when one coherent patch will do.",
 		],
 		parameters: APPLY_PATCH_PARAMETERS,
-		renderShell: "self",
 		prepareArguments: prepareApplyPatchArguments,
 		async execute(toolCallId, params, signal, _onUpdate, ctx) {
 			if (signal?.aborted) {
