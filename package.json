@@ -51,11 +51,13 @@
     "access": "public"
   },
   "peerDependencies": {
+    "@mariozechner/pi-ai": "^0.67.0",
     "@mariozechner/pi-coding-agent": "^0.67.0",
     "@mariozechner/pi-tui": "^0.67.0",
     "@sinclair/typebox": "*"
   },
   "devDependencies": {
+    "@mariozechner/pi-ai": "^0.67.3",
     "@mariozechner/pi-coding-agent": "^0.67.3",
     "@mariozechner/pi-tui": "^0.67.3",
     "tsx": "^4.20.5",
