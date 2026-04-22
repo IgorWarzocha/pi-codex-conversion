@@ -320,7 +320,7 @@ export function convertResponsesTools(tools: Tool[], options?: ConvertResponsesT
 		type: "function",
 		name: tool.name,
 		description: tool.description,
-		parameters: tool.parameters,
+		parameters: tool.parameters as unknown as Record<string, unknown>,
 		strict,
 	}));
 }

@@ -1,5 +1,5 @@
 import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "@mariozechner/pi-coding-agent";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import { Box, Container, Text } from "@mariozechner/pi-tui";
 import { isOpenAICodexModel } from "../adapter/codex-model.ts";
 
