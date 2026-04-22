@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -15,11 +16,12 @@ import {
 	type Model,
 	type SimpleStreamOptions,
 } from "@mariozechner/pi-ai";
+import type { ResponseCreateParamsStreaming } from "openai/resources/responses/responses.js";
 import {
 	convertResponsesMessages,
 	convertResponsesTools,
 	processResponsesStream,
-} from "../../node_modules/@mariozechner/pi-ai/dist/providers/openai-responses-shared.js";
+} from "./openai-responses-shared.ts";
 
 const DEFAULT_CODEX_BASE_URL = "https://chatgpt.com/backend-api";
 const JWT_CLAIM_PATH = "https://api.openai.com/auth";
@@ -61,6 +63,11 @@ interface SurfacedWebSearch {
 	sources: Array<{ title?: string; url: string }>;
 }
 
+interface CachedImagePreview {
+	data: string;
+	mimeType: string;
+}
+
 interface ResponsesBody {
 	model: string;
 	store: boolean;
@@ -95,6 +102,8 @@ interface ResponseEnvelope {
 	error?: { message?: string };
 	[key: string]: unknown;
 }
+
+type ServiceTier = ResponseCreateParamsStreaming["service_tier"];
 
 interface StreamEventShape {
 	type?: string;
@@ -251,6 +260,45 @@ function clampReasoningEffort(modelId: string, effort: string): string {
 	if (id === "gpt-5.1" && effort === "xhigh") return "high";
 	if (id === "gpt-5.1-codex-mini") return effort === "high" || effort === "xhigh" ? "high" : "medium";
 	return effort;
+}
+
+function getServiceTierCostMultiplier(serviceTier: ServiceTier): number {
+	switch (serviceTier) {
+		case "flex":
+			return 0.5;
+		case "priority":
+			return 2;
+		default:
+			return 1;
+	}
+}
+
+function applyServiceTierPricing(usage: AssistantMessage["usage"], serviceTier: ServiceTier): void {
+	const multiplier = getServiceTierCostMultiplier(serviceTier);
+	if (multiplier === 1) return;
+	usage.cost.input *= multiplier;
+	usage.cost.output *= multiplier;
+	usage.cost.cacheRead *= multiplier;
+	usage.cost.cacheWrite *= multiplier;
+	usage.cost.total = usage.cost.input + usage.cost.output + usage.cost.cacheRead + usage.cost.cacheWrite;
+}
+
+function resolveCodexServiceTier(responseServiceTier: ServiceTier, requestServiceTier: ServiceTier): ServiceTier {
+	if (responseServiceTier === "default" && (requestServiceTier === "flex" || requestServiceTier === "priority")) {
+		return requestServiceTier;
+	}
+	return responseServiceTier ?? requestServiceTier;
+}
+
+function createContextMessage(savedImages: SavedGeneratedImage[]): any {
+	return {
+		role: "custom",
+		customType: IMAGE_SAVE_CONTEXT_MESSAGE_TYPE,
+		content: buildGeneratedImageContextMessage(savedImages),
+		display: false,
+		details: { savedImages },
+		timestamp: Date.now(),
+	};
 }
 
 function buildRequestBody<TApi extends Api>(model: Model<TApi>, context: Context, options?: SimpleStreamOptions): ResponsesBody {
@@ -554,11 +602,19 @@ export function buildWebSearchSummaryText(searches: SurfacedWebSearch[]): string
 	return searches.length === 1 ? "Searched the web once" : `Searched the web ${searches.length} times`;
 }
 
-function buildGeneratedImageDisplayContent(savedImage: SavedGeneratedImage, imageData: { data: string; mimeType: string }, expanded: boolean) {
-	return [
-		{ type: "text" as const, text: buildGeneratedImageDisplayText(savedImage, { expanded }) },
-		{ type: "image" as const, data: imageData.data, mimeType: imageData.mimeType },
-	];
+function loadCachedImagePreview(savedImage: SavedGeneratedImage, imagePreviewCache: Map<string, CachedImagePreview>): CachedImagePreview | undefined {
+	const cached = imagePreviewCache.get(savedImage.absolutePath);
+	if (cached) return cached;
+	try {
+		const preview = {
+			data: readFileSync(savedImage.absolutePath).toString("base64"),
+			mimeType: `image/${savedImage.outputFormat}`,
+		};
+		imagePreviewCache.set(savedImage.absolutePath, preview);
+		return preview;
+	} catch {
+		return undefined;
+	}
 }
 
 function createInitialAssistantMessage<TApi extends Api>(model: Model<TApi>): AssistantMessage {
@@ -689,7 +745,11 @@ function createCodexStream<TApi extends Api>(
 				onWebSearchCaptured: (search) => deps.onWebSearchCaptured?.(search),
 			});
 
-			await processResponsesStream(tappedEvents as AsyncIterable<never>, output, stream, model);
+			await processResponsesStream(tappedEvents as AsyncIterable<never>, output, stream, model, {
+				serviceTier: (options as { serviceTier?: ServiceTier } | undefined)?.serviceTier,
+				resolveServiceTier: resolveCodexServiceTier,
+				applyServiceTierPricing,
+			});
 			finalizeUsage(model, output);
 
 			if (options?.signal?.aborted) {
@@ -713,7 +773,9 @@ function createCodexStream<TApi extends Api>(
 
 export function registerOpenAICodexCustomProvider(pi: ExtensionAPI, options: { getCurrentCwd: () => string }): void {
 	const pendingImageDisplays: PendingImageDisplay[] = [];
+	const pendingImageContextNotes: SavedGeneratedImage[] = [];
 	const pendingWebSearches: SurfacedWebSearch[] = [];
+	const imagePreviewCache = new Map<string, CachedImagePreview>();
 	let pendingFlushTimer: ReturnType<typeof setTimeout> | undefined;
 
 	const flushPendingMessages = () => {
@@ -723,21 +785,26 @@ export function registerOpenAICodexCustomProvider(pi: ExtensionAPI, options: { g
 		const searches = pendingWebSearches.splice(0, pendingWebSearches.length);
 
 		for (const { savedImage, imageData } of images) {
+			imagePreviewCache.set(savedImage.absolutePath, imageData);
 			pi.sendMessage(
 				{
 					customType: IMAGE_SAVE_DISPLAY_MESSAGE_TYPE,
-					content: buildGeneratedImageDisplayContent(savedImage, imageData, false),
+					content: [{ type: "text", text: buildGeneratedImageDisplayText(savedImage, { expanded: false }) }],
 					display: true,
 					details: { savedImages: [savedImage] } satisfies ImageDisplayMessageDetails,
 				},
 				{ triggerTurn: false },
 			);
+		}
+
+		if (pendingImageContextNotes.length > 0) {
+			const savedImages = pendingImageContextNotes.splice(0, pendingImageContextNotes.length);
 			pi.sendMessage(
 				{
 					customType: IMAGE_SAVE_CONTEXT_MESSAGE_TYPE,
-					content: buildGeneratedImageContextMessage([savedImage]),
+					content: buildGeneratedImageContextMessage(savedImages),
 					display: false,
-					details: { savedImages: [savedImage] },
+					details: { savedImages },
 				},
 				{ triggerTurn: false },
 			);
@@ -769,7 +836,9 @@ export function registerOpenAICodexCustomProvider(pi: ExtensionAPI, options: { g
 			pendingFlushTimer = undefined;
 		}
 		pendingImageDisplays.length = 0;
+		pendingImageContextNotes.length = 0;
 		pendingWebSearches.length = 0;
+		imagePreviewCache.clear();
 	};
 
 	pi.registerProvider("openai-codex", {
@@ -779,6 +848,7 @@ export function registerOpenAICodexCustomProvider(pi: ExtensionAPI, options: { g
 				getCurrentCwd: options.getCurrentCwd,
 				onImageSaved: (savedImage, imageData) => {
 					pendingImageDisplays.push({ savedImage, imageData });
+					pendingImageContextNotes.push(savedImage);
 				},
 				onWebSearchCaptured: (search) => {
 					pendingWebSearches.push(search);
@@ -791,11 +861,21 @@ export function registerOpenAICodexCustomProvider(pi: ExtensionAPI, options: { g
 	});
 
 	pi.on("session_shutdown", async () => {
+		if (pendingImageDisplays.length > 0 || pendingImageContextNotes.length > 0 || pendingWebSearches.length > 0) {
+			flushPendingMessages();
+		}
 		clearPendingMessages();
 	});
 
 	pi.on("agent_end", async () => {
 		schedulePendingMessageFlush();
+	});
+
+	pi.on("context", async (event) => {
+		if (pendingImageContextNotes.length === 0) return undefined;
+		return {
+			messages: [...event.messages, createContextMessage(pendingImageContextNotes)],
+		};
 	});
 
 	pi.registerMessageRenderer<ImageDisplayMessageDetails>(IMAGE_SAVE_DISPLAY_MESSAGE_TYPE, (message, options, theme) => {
@@ -811,13 +891,12 @@ export function registerOpenAICodexCustomProvider(pi: ExtensionAPI, options: { g
 						.map((item) => item.text)
 						.join("\n");
 		box.addChild(new Text(`\n${theme.fg("customMessageText", textContent)}`, 0, 0));
-		if (typeof message.content !== "string") {
-			const images = message.content.filter((item) => item.type === "image");
-			for (let i = 0; i < images.length; i++) {
-				const image = images[i];
+		if (savedImage) {
+			const preview = loadCachedImagePreview(savedImage, imagePreviewCache);
+			if (preview) {
 				box.addChild(new Spacer(1));
 				box.addChild(
-					new Image(image.data, image.mimeType, { fallbackColor: (text) => theme.fg("customMessageText", text) }, { maxWidthCells: 60 }),
+					new Image(preview.data, preview.mimeType, { fallbackColor: (text) => theme.fg("customMessageText", text) }, { maxWidthCells: 60 }),
 				);
 			}
 		}

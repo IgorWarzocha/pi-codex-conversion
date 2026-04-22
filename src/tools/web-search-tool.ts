@@ -8,7 +8,7 @@ const WEB_SEARCH_LOCAL_EXECUTION_MESSAGE =
 	"web_search is a native openai-codex provider tool and should not execute locally";
 export const WEB_SEARCH_SESSION_NOTE_TYPE = "codex-web-search-session-note";
 export const WEB_SEARCH_SESSION_NOTE_TEXT =
-	"Native OpenAI Codex web search is enabled for this session. Search runs silently and is not surfaced as a separate tool call.";
+	"Native OpenAI Codex web search is enabled for this session. Search activity is surfaced as merged foldable status messages instead of native tool-call rows.";
 const WEB_SEARCH_MULTIMODAL_CONTENT_TYPES = ["text", "image"] as const;
 
 const WEB_SEARCH_PARAMETERS = Type.Unsafe<Record<string, never>>({

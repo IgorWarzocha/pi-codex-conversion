@@ -14,7 +14,7 @@ This package replaces Pi's default Codex/GPT experience with a narrower Codex-li
 ![Available tools](./available-tools.png)
 
 > [!NOTE]
-> Native OpenAI Codex Responses web search runs silently. Pi does not expose native web-search usage events to extensions, so the adapter shows a one-time session notice instead of per-search tool-call history.
+> Native OpenAI Codex Responses web search activity is surfaced as merged foldable status messages. Pi still does not expose native web-search usage as true tool-call rows.
 
 ## Active tools in adapter mode
 
@@ -64,7 +64,7 @@ npm run check
 - `view_image({ path: "/absolute/path/to/screenshot.png" })` is available on image-capable models
 - `web_search` is surfaced only on `openai-codex`, and the adapter rewrites it into the native OpenAI Responses `type: "web_search"` payload instead of executing a local function tool
 - `image_generation` is surfaced only on image-capable `openai-codex` models, and the adapter rewrites it into the native OpenAI Responses `type: "image_generation", output_format: "png"` payload instead of executing a local function tool
-- when native web search is available, the adapter shows a one-time session notice; individual searches are not surfaced because Pi does not expose native web-search execution events to extensions
+- when native web search is available, the adapter shows a one-time session notice and merged foldable search-activity messages instead of native tool-call rows
 - `apply_patch` partial failures stay inline in the patch row so successful and failed file entries can be seen together
 
 Raw command output is still available by expanding the tool result.
