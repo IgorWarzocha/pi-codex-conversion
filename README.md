@@ -5,11 +5,11 @@ Codex-oriented adapter for [Pi](https://github.com/badlogic/pi-mono).
 This package replaces Pi's default Codex/GPT experience with a narrower Codex-like surface while staying close to Pi's own runtime and prompt construction:
 
 - swaps active tools to `exec_command`, `write_stdin`, `apply_patch`, `view_image`, plus native OpenAI Codex Responses `web_search` and `image_generation` on `openai-codex`
-- saves native Codex image-generation outputs into `.pi/openai-codex-images/` inside the current workspace and injects a note with the saved path back into the session
+- saves native Codex image-generation outputs into `.pi/openai-codex-images/` at the workspace/repo root and mirrors the newest image to `.pi/openai-codex-images/latest.png`
 - preserves Pi's composed system prompt and applies a narrow Codex-oriented delta on top
 - renders exec activity with Codex-style command and background-terminal labels
 - renders `apply_patch` calls with Codex-style `Added` / `Edited` / `Deleted` diff blocks and Pi-style colored diff lines
-- targets modern Pi tool/rendering APIs and is aligned with Pi `0.67.x`
+- targets modern Pi tool/rendering APIs and is aligned with Pi `0.69.x`
 
 ![Available tools](./available-tools.png)
 
@@ -64,6 +64,7 @@ npm run check
 - `view_image({ path: "/absolute/path/to/screenshot.png" })` is available on image-capable models
 - `web_search` is surfaced only on `openai-codex`, and the adapter rewrites it into the native OpenAI Responses `type: "web_search"` payload instead of executing a local function tool
 - `image_generation` is surfaced only on image-capable `openai-codex` models, and the adapter rewrites it into the native OpenAI Responses `type: "image_generation", output_format: "png"` payload instead of executing a local function tool
+- native `image_generation` outputs are saved under `.pi/openai-codex-images/` at the workspace/repo root, with the newest image mirrored to `.pi/openai-codex-images/latest.png`
 - when native web search is available, the adapter shows a one-time session notice and merged foldable search-activity messages instead of native tool-call rows
 - `apply_patch` partial failures stay inline in the patch row so successful and failed file entries can be seen together
 
@@ -142,6 +143,7 @@ That keeps the prompt much closer to `pi-mono` while still steering the model to
 - `view_image` resolves paths against the active session cwd and only exposes `detail: "original"` for Codex-family image-capable models.
 - `web_search` is exposed only for the `openai-codex` provider and is forwarded as the native OpenAI Codex Responses web search tool.
 - `image_generation` is exposed only for image-capable `openai-codex` models and is forwarded as the native OpenAI Codex Responses image-generation tool.
+- generated images are written under `.pi/openai-codex-images/` at the workspace/repo root, and the latest image is mirrored to `.pi/openai-codex-images/latest.png`.
 - `apply_patch` paths stay restricted to the current working directory.
 - partial `apply_patch` failures stay in the original patch block and highlight the failed entry instead of adding a second warning row.
 - `exec_command` / `write_stdin` use a custom PTY-backed session manager via `node-pty` for interactive sessions.
