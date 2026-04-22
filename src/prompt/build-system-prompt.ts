@@ -13,6 +13,7 @@ const CODEX_GUIDELINES = [
 	"For short or non-interactive commands, prefer the default `exec_command` wait instead of a tiny `yield_time_ms` that forces an extra follow-up call.",
 	"When polling a running exec session with empty `chars`, wait meaningfully between polls and do not repeatedly poll by reflex.",
 	"Do not request `tty` unless interactive terminal behavior is required.",
+	"Native `image_generation` outputs are saved under `.pi/openai-codex-images/`. Use `view_image` only when pixel-level inspection is necessary.",
 ];
 
 function insertBeforeTrailingContext(prompt: string, section: string): string {

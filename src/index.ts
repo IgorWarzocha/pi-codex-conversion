@@ -1,11 +1,25 @@
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { getCodexRuntimeShell } from "./adapter/runtime-shell.ts";
-import { CORE_ADAPTER_TOOL_NAMES, DEFAULT_TOOL_NAMES, STATUS_KEY, STATUS_TEXT, VIEW_IMAGE_TOOL_NAME, WEB_SEARCH_TOOL_NAME } from "./adapter/tool-set.ts";
+import {
+	CORE_ADAPTER_TOOL_NAMES,
+	DEFAULT_TOOL_NAMES,
+	IMAGE_GENERATION_TOOL_NAME,
+	STATUS_KEY,
+	STATUS_TEXT,
+	VIEW_IMAGE_TOOL_NAME,
+	WEB_SEARCH_TOOL_NAME,
+} from "./adapter/tool-set.ts";
 import { clearApplyPatchRenderState, registerApplyPatchTool } from "./tools/apply-patch-tool.ts";
 import { isCodexLikeContext, isOpenAICodexContext } from "./adapter/codex-model.ts";
 import { createExecCommandTracker } from "./tools/exec-command-state.ts";
 import { registerExecCommandTool } from "./tools/exec-command-tool.ts";
 import { createExecSessionManager } from "./tools/exec-session-manager.ts";
+import {
+	IMAGE_SAVE_DISPLAY_MESSAGE_TYPE,
+	WEB_SEARCH_ACTIVITY_MESSAGE_TYPE,
+	registerOpenAICodexCustomProvider,
+} from "./providers/openai-codex-custom-provider.ts";
+import { registerImageGenerationTool, rewriteNativeImageGenerationTool, supportsNativeImageGeneration } from "./tools/image-generation-tool.ts";
 import { buildCodexSystemPrompt, extractPiPromptSkills, type PromptSkill } from "./prompt/build-system-prompt.ts";
 import { registerViewImageTool, supportsOriginalImageDetail } from "./tools/view-image-tool.ts";
 import {
@@ -21,12 +35,13 @@ import { registerWriteStdinTool } from "./tools/write-stdin-tool.ts";
 
 interface AdapterState {
 	enabled: boolean;
+	cwd: string;
 	previousToolNames?: string[];
 	promptSkills: PromptSkill[];
 	webSearchNoticeShown: boolean;
 }
 
-const ADAPTER_TOOL_NAMES = [...CORE_ADAPTER_TOOL_NAMES, VIEW_IMAGE_TOOL_NAME, WEB_SEARCH_TOOL_NAME];
+const ADAPTER_TOOL_NAMES = [...CORE_ADAPTER_TOOL_NAMES, WEB_SEARCH_TOOL_NAME, IMAGE_GENERATION_TOOL_NAME, VIEW_IMAGE_TOOL_NAME];
 
 function getCommandArg(args: unknown): string | undefined {
 	if (!args || typeof args !== "object" || !("cmd" in args) || typeof args.cmd !== "string") {
@@ -47,12 +62,16 @@ function isToolCallOnlyAssistantMessage(message: unknown): boolean {
 
 export default function codexConversion(pi: ExtensionAPI) {
 	const tracker = createExecCommandTracker();
-	const state: AdapterState = { enabled: false, promptSkills: [], webSearchNoticeShown: false };
+	const state: AdapterState = { enabled: false, cwd: process.cwd(), promptSkills: [], webSearchNoticeShown: false };
 	const sessions = createExecSessionManager();
 
+	registerOpenAICodexCustomProvider(pi, {
+		getCurrentCwd: () => state.cwd,
+	});
 	registerApplyPatchTool(pi);
 	registerExecCommandTool(pi, tracker, sessions);
 	registerWriteStdinTool(pi, sessions);
+	registerImageGenerationTool(pi);
 	registerWebSearchTool(pi);
 	registerWebSearchSessionNoteRenderer(pi);
 
@@ -61,6 +80,7 @@ export default function codexConversion(pi: ExtensionAPI) {
 	});
 
 	pi.on("session_start", async (_event, ctx) => {
+		state.cwd = ctx.cwd;
 		state.webSearchNoticeShown = false;
 		clearApplyPatchRenderState();
 		tracker.clear();
@@ -68,6 +88,7 @@ export default function codexConversion(pi: ExtensionAPI) {
 	});
 
 	pi.on("model_select", async (_event, ctx) => {
+		state.cwd = ctx.cwd;
 		syncAdapter(pi, ctx, state);
 	});
 
@@ -110,16 +131,23 @@ export default function codexConversion(pi: ExtensionAPI) {
 	});
 
 	pi.on("before_provider_request", async (event, ctx) => {
+		state.cwd = ctx.cwd;
 		if (!isOpenAICodexContext(ctx)) {
 			return undefined;
 		}
-		return rewriteNativeWebSearchTool(event.payload, ctx.model);
+		return rewriteNativeImageGenerationTool(rewriteNativeWebSearchTool(event.payload, ctx.model), ctx.model);
 	});
 
 	pi.on("context", async (event) => {
 		return {
 			messages: event.messages.filter(
-				(message) => !(message.role === "custom" && message.customType === WEB_SEARCH_SESSION_NOTE_TYPE),
+				(message) =>
+					!(
+						message.role === "custom" &&
+						(message.customType === WEB_SEARCH_SESSION_NOTE_TYPE ||
+							message.customType === WEB_SEARCH_ACTIVITY_MESSAGE_TYPE ||
+							message.customType === IMAGE_SAVE_DISPLAY_MESSAGE_TYPE)
+					),
 			),
 		};
 	});
@@ -169,11 +197,14 @@ function setStatus(ctx: ExtensionContext, enabled: boolean): void {
 
 function getAdapterToolNames(ctx: ExtensionContext): string[] {
 	const toolNames = [...CORE_ADAPTER_TOOL_NAMES];
-	if (Array.isArray(ctx.model?.input) && ctx.model.input.includes("image")) {
-		toolNames.push(VIEW_IMAGE_TOOL_NAME);
-	}
 	if (supportsNativeWebSearch(ctx.model)) {
 		toolNames.push(WEB_SEARCH_TOOL_NAME);
+	}
+	if (supportsNativeImageGeneration(ctx.model)) {
+		toolNames.push(IMAGE_GENERATION_TOOL_NAME);
+	}
+	if (Array.isArray(ctx.model?.input) && ctx.model.input.includes("image")) {
+		toolNames.push(VIEW_IMAGE_TOOL_NAME);
 	}
 	return toolNames;
 }

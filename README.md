@@ -4,7 +4,8 @@ Codex-oriented adapter for [Pi](https://github.com/badlogic/pi-mono).
 
 This package replaces Pi's default Codex/GPT experience with a narrower Codex-like surface while staying close to Pi's own runtime and prompt construction:
 
-- swaps active tools to `exec_command`, `write_stdin`, `apply_patch`, `view_image`, and native OpenAI Codex Responses `web_search` on `openai-codex`
+- swaps active tools to `exec_command`, `write_stdin`, `apply_patch`, `view_image`, plus native OpenAI Codex Responses `web_search` and `image_generation` on `openai-codex`
+- saves native Codex image-generation outputs into `.pi/openai-codex-images/` inside the current workspace and injects a note with the saved path back into the session
 - preserves Pi's composed system prompt and applies a narrow Codex-oriented delta on top
 - renders exec activity with Codex-style command and background-terminal labels
 - renders `apply_patch` calls with Codex-style `Added` / `Edited` / `Deleted` diff blocks and Pi-style colored diff lines
@@ -13,7 +14,7 @@ This package replaces Pi's default Codex/GPT experience with a narrower Codex-li
 ![Available tools](./available-tools.png)
 
 > [!NOTE]
-> Native OpenAI Codex Responses web search runs silently. Pi does not expose native web-search usage events to extensions, so the adapter shows a one-time session notice instead of per-search tool-call history.
+> Native OpenAI Codex Responses web search activity is surfaced as merged foldable status messages. Pi still does not expose native web-search usage as true tool-call rows.
 
 ## Active tools in adapter mode
 
@@ -22,8 +23,9 @@ When the adapter is active, the LLM sees these tools:
 - `exec_command` — shell execution with Codex-style `cmd` parameters and resumable sessions
 - `write_stdin` — continue or poll a running exec session
 - `apply_patch` — patch tool
-- `view_image` — image-only wrapper around Pi's native image reading, enabled only for image-capable models
 - `web_search` — native OpenAI Codex Responses web search, enabled only on the `openai-codex` provider
+- `image_generation` — native OpenAI Codex Responses image generation, enabled only on image-capable `openai-codex` models
+- `view_image` — image-only wrapper around Pi's native image reading, enabled only for image-capable models
 
 Notably:
 
@@ -61,7 +63,8 @@ npm run check
 - `write_stdin({ session_id, chars: "y\\n" })` renders like `Interacted with background terminal`
 - `view_image({ path: "/absolute/path/to/screenshot.png" })` is available on image-capable models
 - `web_search` is surfaced only on `openai-codex`, and the adapter rewrites it into the native OpenAI Responses `type: "web_search"` payload instead of executing a local function tool
-- when native web search is available, the adapter shows a one-time session notice; individual searches are not surfaced because Pi does not expose native web-search execution events to extensions
+- `image_generation` is surfaced only on image-capable `openai-codex` models, and the adapter rewrites it into the native OpenAI Responses `type: "image_generation", output_format: "png"` payload instead of executing a local function tool
+- when native web search is available, the adapter shows a one-time session notice and merged foldable search-activity messages instead of native tool-call rows
 - `apply_patch` partial failures stay inline in the patch row so successful and failed file entries can be seen together
 
 Raw command output is still available by expanding the tool result.
@@ -138,6 +141,7 @@ That keeps the prompt much closer to `pi-mono` while still steering the model to
 - When you switch away from those models, Pi restores the previous active tool set.
 - `view_image` resolves paths against the active session cwd and only exposes `detail: "original"` for Codex-family image-capable models.
 - `web_search` is exposed only for the `openai-codex` provider and is forwarded as the native OpenAI Codex Responses web search tool.
+- `image_generation` is exposed only for image-capable `openai-codex` models and is forwarded as the native OpenAI Codex Responses image-generation tool.
 - `apply_patch` paths stay restricted to the current working directory.
 - partial `apply_patch` failures stay in the original patch block and highlight the failed entry instead of adding a second warning row.
 - `exec_command` / `write_stdin` use a custom PTY-backed session manager via `node-pty` for interactive sessions.
