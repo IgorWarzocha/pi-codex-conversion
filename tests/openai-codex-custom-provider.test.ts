@@ -121,3 +121,27 @@ test("saveOpenAICodexGeneratedImage writes the decoded image bytes into the work
 		await fs.rm(cwd, { recursive: true, force: true });
 	}
 });
+
+test("saveOpenAICodexGeneratedImage anchors generated images to the repo root when cwd is a subdirectory", async () => {
+	const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "pi-codex-image-root-"));
+	const nestedCwd = path.join(repoRoot, "packages", "feature");
+	const encoded = Buffer.from("png-bytes").toString("base64");
+
+	try {
+		await fs.mkdir(path.join(repoRoot, ".git"), { recursive: true });
+		await fs.mkdir(nestedCwd, { recursive: true });
+
+		const saved = await saveOpenAICodexGeneratedImage(nestedCwd, {
+			responseId: "resp_123",
+			callId: "ig_456",
+			result: encoded,
+			outputFormat: "png",
+		});
+
+		assert.equal(saved.absolutePath, path.join(repoRoot, ".pi", "openai-codex-images", "ig_456-resp_123.png"));
+		assert.equal(saved.relativePath, path.join(".pi", "openai-codex-images", "ig_456-resp_123.png"));
+		assert.deepEqual(await fs.readFile(saved.absolutePath), Buffer.from("png-bytes"));
+	} finally {
+		await fs.rm(repoRoot, { recursive: true, force: true });
+	}
+});

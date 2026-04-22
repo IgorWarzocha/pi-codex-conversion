@@ -1,7 +1,3 @@
-import { readFileSync } from "node:fs";
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Box, Image, Spacer, Text } from "@mariozechner/pi-tui";
 import {
@@ -26,7 +22,7 @@ const DEFAULT_CODEX_BASE_URL = "https://chatgpt.com/backend-api";
 const JWT_CLAIM_PATH = "https://api.openai.com/auth";
 export const IMAGE_SAVE_DISPLAY_MESSAGE_TYPE = "codex-image-generation-display";
 export const WEB_SEARCH_ACTIVITY_MESSAGE_TYPE = "codex-web-search-activity";
-const OPENAI_CODEX_IMAGE_DIR = path.join(".pi", "openai-codex-images");
+const OPENAI_CODEX_IMAGE_DIR = ".pi/openai-codex-images";
 const OPENAI_CODEX_LATEST_IMAGE_NAME = "latest.png";
 const MAX_RETRIES = 3;
 const BASE_DELAY_MS = 1000;
@@ -35,6 +31,17 @@ const CODEX_RESPONSE_STATUSES = new Set(["completed", "incomplete", "failed", "c
 const OPENAI_BETA_RESPONSES_WEBSOCKETS = "responses_websockets=2026-02-06";
 const SESSION_WEBSOCKET_CACHE_TTL_MS = 5 * 60 * 1000;
 const dynamicImport = (specifier: string) => import(specifier);
+let _os: { platform(): string; release(): string; arch(): string } | null = null;
+
+if (typeof process !== "undefined" && (process.versions?.node || process.versions?.bun)) {
+	dynamicImport("node:os")
+		.then((module) => {
+			_os = module;
+		})
+		.catch(() => {
+			_os = null;
+		});
+}
 
 interface SavedGeneratedImage {
 	absolutePath: string;
@@ -56,6 +63,10 @@ interface PendingImageDisplay {
 	imageData: { data: string; mimeType: string };
 }
 
+interface QueuedImageActivity extends PendingImageDisplay {
+	kind: "image";
+}
+
 interface SurfacedWebSearch {
 	callId: string;
 	status?: string;
@@ -63,6 +74,13 @@ interface SurfacedWebSearch {
 	queries: string[];
 	sources: Array<{ title?: string; url: string }>;
 }
+
+interface QueuedWebSearchActivity {
+	kind: "web-search";
+	search: SurfacedWebSearch;
+}
+
+type PendingActivity = QueuedImageActivity | QueuedWebSearchActivity;
 
 interface CachedImagePreview {
 	data: string;
@@ -78,7 +96,7 @@ interface WebSocketLike {
 }
 
 interface WebSocketConstructorLike {
-	new (url: string, options?: { headers?: Record<string, string> }): WebSocketLike;
+	new (url: string, options?: { headers?: Record<string, string> } | string | string[]): WebSocketLike;
 }
 
 interface SessionWebSocketCacheEntry {
@@ -88,6 +106,10 @@ interface SessionWebSocketCacheEntry {
 }
 
 let webSocketConstructorPromise: Promise<WebSocketConstructorLike | null> | undefined;
+let fsPromisesPromise: Promise<typeof import("node:fs/promises")> | undefined;
+const workspaceRootCache = new Map<string, Promise<string>>();
+
+const PATH_SEPARATOR = "/";
 
 interface ResponsesBody {
 	model: string;
@@ -173,19 +195,127 @@ function shortHash(str: string): string {
 	return (h2 >>> 0).toString(36) + (h1 >>> 0).toString(36);
 }
 
+function normalizePath(value: string): string {
+	if (!value) return ".";
+	const normalized = value.replace(/\/+/g, PATH_SEPARATOR);
+	if (normalized === PATH_SEPARATOR) return normalized;
+	return normalized.replace(/\/+$/g, "") || PATH_SEPARATOR;
+}
+
+function joinPaths(...parts: string[]): string {
+	if (parts.length === 0) return ".";
+	let result = parts[0] ?? "";
+	for (let i = 1; i < parts.length; i++) {
+		const part = parts[i];
+		if (!part) continue;
+		if (!result || result.endsWith(PATH_SEPARATOR)) {
+			result += part.replace(/^\/+/, "");
+		} else {
+			result += `${PATH_SEPARATOR}${part.replace(/^\/+/, "")}`;
+		}
+	}
+	return normalizePath(result);
+}
+
+function dirnamePath(value: string): string {
+	const normalized = normalizePath(value);
+	if (normalized === PATH_SEPARATOR) return PATH_SEPARATOR;
+	const index = normalized.lastIndexOf(PATH_SEPARATOR);
+	if (index < 0) return ".";
+	if (index === 0) return PATH_SEPARATOR;
+	return normalized.slice(0, index);
+}
+
+function splitPathSegments(value: string): string[] {
+	const normalized = normalizePath(value);
+	if (normalized === PATH_SEPARATOR) return [];
+	return normalized.replace(/^\/+/, "").split(PATH_SEPARATOR).filter(Boolean);
+}
+
+function relativePath(from: string, to: string): string {
+	const normalizedFrom = normalizePath(from);
+	const normalizedTo = normalizePath(to);
+	if (normalizedFrom === normalizedTo) return "";
+	const fromSegments = splitPathSegments(normalizedFrom);
+	const toSegments = splitPathSegments(normalizedTo);
+	let shared = 0;
+	while (shared < fromSegments.length && shared < toSegments.length && fromSegments[shared] === toSegments[shared]) {
+		shared++;
+	}
+	const upSegments = new Array(fromSegments.length - shared).fill("..");
+	const downSegments = toSegments.slice(shared);
+	return [...upSegments, ...downSegments].join(PATH_SEPARATOR);
+}
+
+async function getNodeFsPromises(): Promise<typeof import("node:fs/promises")> {
+	if (!fsPromisesPromise) {
+		fsPromisesPromise = dynamicImport("node:fs/promises") as Promise<typeof import("node:fs/promises")>;
+	}
+	return fsPromisesPromise;
+}
+
+function getNodeFsSync(): { readFileSync(path: string): Buffer } | null {
+	if (typeof process === "undefined" || !(process.versions?.node || process.versions?.bun)) {
+		return null;
+	}
+	const builtinProcess = process as typeof process & { getBuiltinModule?: (specifier: string) => unknown };
+	if (typeof builtinProcess.getBuiltinModule !== "function") {
+		return null;
+	}
+	try {
+		const module = builtinProcess.getBuiltinModule("node:fs") as { readFileSync?: (path: string) => Buffer } | undefined;
+		return typeof module?.readFileSync === "function" ? { readFileSync: module.readFileSync } : null;
+	} catch {
+		return null;
+	}
+}
+
+async function pathExists(value: string): Promise<boolean> {
+	try {
+		const fs = await getNodeFsPromises();
+		await fs.access(value);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+async function resolveWorkspaceRoot(cwd: string): Promise<string> {
+	const normalizedCwd = normalizePath(cwd);
+	const cached = workspaceRootCache.get(normalizedCwd);
+	if (cached) return cached;
+
+	const promise = (async () => {
+		let current = normalizedCwd;
+		while (true) {
+			if (await pathExists(joinPaths(current, ".git"))) {
+				return current;
+			}
+			const parent = dirnamePath(current);
+			if (parent === current || parent === ".") {
+				return normalizedCwd;
+			}
+			current = parent;
+		}
+	})();
+
+	workspaceRootCache.set(normalizedCwd, promise);
+	return promise;
+}
+
 export function getOpenAICodexImageDirectory(cwd: string): string {
-	return path.join(cwd, OPENAI_CODEX_IMAGE_DIR);
+	return joinPaths(cwd, OPENAI_CODEX_IMAGE_DIR);
 }
 
 export function getOpenAICodexImagePath(cwd: string, responseId: string | undefined, callId: string, outputFormat?: string): string {
 	const ext = (outputFormat ?? "png").toLowerCase();
 	const safeCallId = shortenFilePart(callId, "image");
 	const safeResponseId = shortenFilePart(responseId, "response");
-	return path.join(getOpenAICodexImageDirectory(cwd), `${safeCallId}-${safeResponseId}.${ext}`);
+	return joinPaths(getOpenAICodexImageDirectory(cwd), `${safeCallId}-${safeResponseId}.${ext}`);
 }
 
 export function getOpenAICodexLatestImagePath(cwd: string): string {
-	return path.join(getOpenAICodexImageDirectory(cwd), OPENAI_CODEX_LATEST_IMAGE_NAME);
+	return joinPaths(getOpenAICodexImageDirectory(cwd), OPENAI_CODEX_LATEST_IMAGE_NAME);
 }
 
 export function buildGeneratedImageDisplayText(savedImage: SavedGeneratedImage, options?: { expanded?: boolean }): string {
@@ -201,23 +331,26 @@ export async function saveOpenAICodexGeneratedImage(
 	cwd: string,
 	image: { responseId?: string; callId: string; result: string; outputFormat?: string; revisedPrompt?: string },
 ): Promise<SavedGeneratedImage> {
+	const workspaceRoot = await resolveWorkspaceRoot(cwd);
+	const fs = await getNodeFsPromises();
 	const bytes = Buffer.from(image.result, "base64");
-	const absolutePath = getOpenAICodexImagePath(cwd, image.responseId, image.callId, image.outputFormat);
-	const latestAbsolutePath = getOpenAICodexLatestImagePath(cwd);
-	await fs.mkdir(path.dirname(absolutePath), { recursive: true });
+	const absolutePath = getOpenAICodexImagePath(workspaceRoot, image.responseId, image.callId, image.outputFormat);
+	const latestAbsolutePath = getOpenAICodexLatestImagePath(workspaceRoot);
+	await fs.mkdir(dirnamePath(absolutePath), { recursive: true });
 	await fs.writeFile(absolutePath, bytes);
 	await fs.writeFile(latestAbsolutePath, bytes);
 
-	const relative = path.relative(cwd, absolutePath);
-	const latestRelative = path.relative(cwd, latestAbsolutePath);
-	const relativePath = relative && !relative.startsWith("..") ? relative : absolutePath;
-	const latestRelativePath = latestRelative && !latestRelative.startsWith("..") ? latestRelative : latestAbsolutePath;
+	const relativeFilePath = relativePath(workspaceRoot, absolutePath);
+	const latestRelativeFilePath = relativePath(workspaceRoot, latestAbsolutePath);
+	const relativePathValue = relativeFilePath && !relativeFilePath.startsWith("..") ? relativeFilePath : absolutePath;
+	const latestRelativePathValue =
+		latestRelativeFilePath && !latestRelativeFilePath.startsWith("..") ? latestRelativeFilePath : latestAbsolutePath;
 
 	return {
 		absolutePath,
-		relativePath,
+		relativePath: relativePathValue,
 		latestAbsolutePath,
-		latestRelativePath,
+		latestRelativePath: latestRelativePathValue,
 		responseId: image.responseId,
 		callId: image.callId,
 		outputFormat: (image.outputFormat ?? "png").toLowerCase(),
@@ -288,7 +421,7 @@ function buildBaseCodexHeaders(
 	headers.set("Authorization", `Bearer ${token}`);
 	headers.set("chatgpt-account-id", accountId);
 	headers.set("originator", "pi");
-	headers.set("User-Agent", `pi (${os.platform()} ${os.release()}; ${os.arch()})`);
+	headers.set("User-Agent", _os ? `pi (${_os.platform()} ${_os.release()}; ${_os.arch()})` : "pi (browser)");
 	return headers;
 }
 
@@ -493,8 +626,9 @@ async function getWebSocketConstructor(): Promise<WebSocketConstructorLike | nul
 	}
 
 	webSocketConstructorPromise = (async () => {
+		const globalCtor = (globalThis as typeof globalThis & { WebSocket?: WebSocketConstructorLike }).WebSocket;
 		if (typeof process === "undefined" || !(process.versions?.node || process.versions?.bun)) {
-			return null;
+			return typeof globalCtor === "function" ? globalCtor : null;
 		}
 
 		try {
@@ -502,7 +636,7 @@ async function getWebSocketConstructor(): Promise<WebSocketConstructorLike | nul
 			const ctor = wsModule.WebSocket ?? wsModule.default;
 			return typeof ctor === "function" ? ctor : null;
 		} catch {
-			return null;
+			return typeof globalCtor === "function" ? globalCtor : null;
 		}
 	})();
 
@@ -569,9 +703,10 @@ async function connectWebSocket(url: string, headers: Headers, signal: AbortSign
 	return new Promise((resolve, reject) => {
 		let settled = false;
 		let socket: WebSocketLike;
+		const isNodeLike = typeof process !== "undefined" && !!(process.versions?.node || process.versions?.bun);
 
 		try {
-			socket = new WebSocketCtor(url, { headers: wsHeaders });
+			socket = isNodeLike ? new WebSocketCtor(url, { headers: wsHeaders }) : new WebSocketCtor(url);
 		} catch (error) {
 			reject(error instanceof Error ? error : new Error(String(error)));
 			return;
@@ -1060,9 +1195,11 @@ export function buildWebSearchSummaryText(searches: SurfacedWebSearch[]): string
 function loadCachedImagePreview(savedImage: SavedGeneratedImage, imagePreviewCache: Map<string, CachedImagePreview>): CachedImagePreview | undefined {
 	const cached = imagePreviewCache.get(savedImage.absolutePath);
 	if (cached) return cached;
+	const fs = getNodeFsSync();
+	if (!fs) return undefined;
 	try {
 		const preview = {
-			data: readFileSync(savedImage.absolutePath).toString("base64"),
+			data: fs.readFileSync(savedImage.absolutePath).toString("base64"),
 			mimeType: `image/${savedImage.outputFormat}`,
 		};
 		imagePreviewCache.set(savedImage.absolutePath, preview);
@@ -1278,31 +1415,34 @@ function createCodexStream<TApi extends Api>(
 }
 
 export function registerOpenAICodexCustomProvider(pi: ExtensionAPI, options: { getCurrentCwd: () => string }): void {
-	const pendingImageDisplays: PendingImageDisplay[] = [];
-	const pendingWebSearches: SurfacedWebSearch[] = [];
+	const pendingActivities: PendingActivity[] = [];
 	const imagePreviewCache = new Map<string, CachedImagePreview>();
 	let pendingFlushTimer: ReturnType<typeof setTimeout> | undefined;
 
 	const flushPendingMessages = () => {
 		pendingFlushTimer = undefined;
+		const activities = pendingActivities.splice(0, pendingActivities.length);
 
-		const images = pendingImageDisplays.splice(0, pendingImageDisplays.length);
-		const searches = pendingWebSearches.splice(0, pendingWebSearches.length);
+		for (let index = 0; index < activities.length; index++) {
+			const activity = activities[index];
+			if (activity.kind === "image") {
+				imagePreviewCache.set(activity.savedImage.absolutePath, activity.imageData);
+				pi.sendMessage(
+					{
+						customType: IMAGE_SAVE_DISPLAY_MESSAGE_TYPE,
+						content: [{ type: "text", text: buildGeneratedImageDisplayText(activity.savedImage, { expanded: false }) }],
+						display: true,
+						details: { savedImages: [activity.savedImage] } satisfies ImageDisplayMessageDetails,
+					},
+					{ triggerTurn: false },
+				);
+				continue;
+			}
 
-		for (const { savedImage, imageData } of images) {
-			imagePreviewCache.set(savedImage.absolutePath, imageData);
-			pi.sendMessage(
-				{
-					customType: IMAGE_SAVE_DISPLAY_MESSAGE_TYPE,
-					content: [{ type: "text", text: buildGeneratedImageDisplayText(savedImage, { expanded: false }) }],
-					display: true,
-					details: { savedImages: [savedImage] } satisfies ImageDisplayMessageDetails,
-				},
-				{ triggerTurn: false },
-			);
-		}
-
-		if (searches.length > 0) {
+			const searches = [activity.search];
+			while (index + 1 < activities.length && activities[index + 1]?.kind === "web-search") {
+				searches.push((activities[++index] as QueuedWebSearchActivity).search);
+			}
 			pi.sendMessage(
 				{
 					customType: WEB_SEARCH_ACTIVITY_MESSAGE_TYPE,
@@ -1316,7 +1456,7 @@ export function registerOpenAICodexCustomProvider(pi: ExtensionAPI, options: { g
 	};
 
 	const schedulePendingMessageFlush = () => {
-		if (pendingFlushTimer || (pendingImageDisplays.length === 0 && pendingWebSearches.length === 0)) {
+		if (pendingFlushTimer || pendingActivities.length === 0) {
 			return;
 		}
 		pendingFlushTimer = setTimeout(flushPendingMessages, 0);
@@ -1327,8 +1467,7 @@ export function registerOpenAICodexCustomProvider(pi: ExtensionAPI, options: { g
 			clearTimeout(pendingFlushTimer);
 			pendingFlushTimer = undefined;
 		}
-		pendingImageDisplays.length = 0;
-		pendingWebSearches.length = 0;
+		pendingActivities.length = 0;
 		imagePreviewCache.clear();
 	};
 
@@ -1338,10 +1477,10 @@ export function registerOpenAICodexCustomProvider(pi: ExtensionAPI, options: { g
 			createCodexStream(model, context, streamOptions, {
 				getCurrentCwd: options.getCurrentCwd,
 				onImageSaved: (savedImage, imageData) => {
-					pendingImageDisplays.push({ savedImage, imageData });
+					pendingActivities.push({ kind: "image", savedImage, imageData });
 				},
 				onWebSearchCaptured: (search) => {
-					pendingWebSearches.push(search);
+					pendingActivities.push({ kind: "web-search", search });
 				},
 			}),
 	});
@@ -1351,7 +1490,7 @@ export function registerOpenAICodexCustomProvider(pi: ExtensionAPI, options: { g
 	});
 
 	pi.on("session_shutdown", async () => {
-		if (pendingImageDisplays.length > 0 || pendingWebSearches.length > 0) {
+		if (pendingActivities.length > 0) {
 			flushPendingMessages();
 		}
 		clearPendingMessages();
