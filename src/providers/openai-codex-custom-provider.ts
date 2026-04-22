@@ -158,6 +158,19 @@ function shortenFilePart(value: string | undefined, fallback: string): string {
 	return `${prefix}${body.slice(0, 8)}-${body.slice(-4)}`;
 }
 
+function shortHash(str: string): string {
+	let h1 = 0xdeadbeef;
+	let h2 = 0x41c6ce57;
+	for (let i = 0; i < str.length; i++) {
+		const ch = str.charCodeAt(i);
+		h1 = Math.imul(h1 ^ ch, 2654435761);
+		h2 = Math.imul(h2 ^ ch, 1597334677);
+	}
+	h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+	h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+	return (h2 >>> 0).toString(36) + (h1 >>> 0).toString(36);
+}
+
 export function getOpenAICodexImageDirectory(cwd: string): string {
 	return path.join(cwd, OPENAI_CODEX_IMAGE_DIR);
 }
@@ -253,6 +266,16 @@ function resolveCodexWebSocketUrl(baseUrl: string | undefined): string {
 
 function headersToRecord(headers: Headers): Record<string, string> {
 	return Object.fromEntries(headers.entries());
+}
+
+function buildWebSocketCacheKey(url: string, headers: Headers, sessionId: string | undefined): string | undefined {
+	if (!sessionId) return undefined;
+	const headerFingerprint = Object.entries(headersToRecord(headers))
+		.map(([key, value]) => [key.toLowerCase(), value] as const)
+		.sort(([a], [b]) => a.localeCompare(b))
+		.map(([key, value]) => `${key}:${value}`)
+		.join("\n");
+	return `${sessionId}:${shortHash(`${url}\n${headerFingerprint}`)}`;
 }
 
 function createCodexRequestId(): string {
@@ -507,14 +530,14 @@ function closeWebSocketSilently(socket: WebSocketLike, code = 1000, reason = "do
 	}
 }
 
-function scheduleSessionWebSocketExpiry(sessionId: string, entry: SessionWebSocketCacheEntry): void {
+function scheduleSessionWebSocketExpiry(cacheKey: string, entry: SessionWebSocketCacheEntry): void {
 	if (entry.idleTimer) {
 		clearTimeout(entry.idleTimer);
 	}
 	entry.idleTimer = setTimeout(() => {
 		if (entry.busy) return;
 		closeWebSocketSilently(entry.socket, 1000, "idle_timeout");
-		websocketSessionCache.delete(sessionId);
+		websocketSessionCache.delete(cacheKey);
 	}, SESSION_WEBSOCKET_CACHE_TTL_MS);
 }
 
@@ -546,7 +569,6 @@ async function connectWebSocket(url: string, headers: Headers, signal: AbortSign
 	}
 
 	const wsHeaders = headersToRecord(headers);
-	delete wsHeaders["OpenAI-Beta"];
 
 	return new Promise((resolve, reject) => {
 		let settled = false;
@@ -605,7 +627,8 @@ async function acquireWebSocket(
 	sessionId: string | undefined,
 	signal: AbortSignal | undefined,
 ): Promise<{ socket: WebSocketLike; release: (options?: { keep?: boolean }) => void }> {
-	if (!sessionId) {
+	const cacheKey = buildWebSocketCacheKey(url, headers, sessionId);
+	if (!cacheKey) {
 		const socket = await connectWebSocket(url, headers, signal);
 		return {
 			socket,
@@ -619,7 +642,7 @@ async function acquireWebSocket(
 		};
 	}
 
-	const cached = websocketSessionCache.get(sessionId);
+	const cached = websocketSessionCache.get(cacheKey);
 	if (cached) {
 		if (cached.idleTimer) {
 			clearTimeout(cached.idleTimer);
@@ -633,11 +656,11 @@ async function acquireWebSocket(
 				release: ({ keep } = {}) => {
 					if (!keep || !isWebSocketReusable(cached.socket)) {
 						closeWebSocketSilently(cached.socket);
-						websocketSessionCache.delete(sessionId);
+						websocketSessionCache.delete(cacheKey);
 						return;
 					}
 					cached.busy = false;
-					scheduleSessionWebSocketExpiry(sessionId, cached);
+					scheduleSessionWebSocketExpiry(cacheKey, cached);
 				},
 			};
 		}
@@ -654,26 +677,26 @@ async function acquireWebSocket(
 
 		if (!isWebSocketReusable(cached.socket)) {
 			closeWebSocketSilently(cached.socket);
-			websocketSessionCache.delete(sessionId);
+			websocketSessionCache.delete(cacheKey);
 		}
 	}
 
 	const socket = await connectWebSocket(url, headers, signal);
 	const entry: SessionWebSocketCacheEntry = { socket, busy: true };
-	websocketSessionCache.set(sessionId, entry);
+	websocketSessionCache.set(cacheKey, entry);
 	return {
 		socket,
 		release: ({ keep } = {}) => {
 			if (!keep || !isWebSocketReusable(entry.socket)) {
 				closeWebSocketSilently(entry.socket);
 				if (entry.idleTimer) clearTimeout(entry.idleTimer);
-				if (websocketSessionCache.get(sessionId) === entry) {
-					websocketSessionCache.delete(sessionId);
+				if (websocketSessionCache.get(cacheKey) === entry) {
+					websocketSessionCache.delete(cacheKey);
 				}
 				return;
 			}
 			entry.busy = false;
-			scheduleSessionWebSocketExpiry(sessionId, entry);
+			scheduleSessionWebSocketExpiry(cacheKey, entry);
 		},
 	};
 }
@@ -699,6 +722,8 @@ async function* parseWebSocket(socket: WebSocketLike, signal: AbortSignal | unde
 	let done = false;
 	let failed: Error | null = null;
 	let sawCompletion = false;
+	let pendingMessages = 0;
+	let messageChain = Promise.resolve();
 
 	const wake = () => {
 		if (!pending) return;
@@ -708,23 +733,32 @@ async function* parseWebSocket(socket: WebSocketLike, signal: AbortSignal | unde
 	};
 
 	const onMessage = (event: unknown) => {
-		void (async () => {
-			if (!event || typeof event !== "object" || !("data" in event)) return;
-			const text = await decodeWebSocketData((event as { data?: unknown }).data);
-			if (!text) return;
-			try {
-				const parsed = JSON.parse(text) as StreamEventShape;
-				const type = typeof parsed.type === "string" ? parsed.type : "";
-				if (type === "response.completed" || type === "response.done" || type === "response.incomplete") {
-					sawCompletion = true;
-					done = true;
+		pendingMessages++;
+		messageChain = messageChain
+			.then(async () => {
+				if (!event || typeof event !== "object" || !("data" in event)) return;
+				const text = await decodeWebSocketData((event as { data?: unknown }).data);
+				if (!text) return;
+				try {
+					const parsed = JSON.parse(text) as StreamEventShape;
+					const type = typeof parsed.type === "string" ? parsed.type : "";
+					if (type === "response.completed" || type === "response.done" || type === "response.incomplete") {
+						sawCompletion = true;
+						done = true;
+					}
+					queue.push(parsed);
+				} catch {
+					// ignore malformed websocket messages
 				}
-				queue.push(parsed);
+			})
+			.catch((error: unknown) => {
+				failed = error instanceof Error ? error : new Error(String(error));
+				done = true;
+			})
+			.finally(() => {
+				pendingMessages--;
 				wake();
-			} catch {
-				// ignore malformed websocket messages
-			}
-		})();
+			});
 	};
 
 	const onError = (event: unknown) => {
@@ -766,7 +800,7 @@ async function* parseWebSocket(socket: WebSocketLike, signal: AbortSignal | unde
 				yield queue.shift() as StreamEventShape;
 				continue;
 			}
-			if (done) break;
+			if (done && pendingMessages === 0) break;
 			await new Promise<void>((resolve) => {
 				pending = resolve;
 			});
