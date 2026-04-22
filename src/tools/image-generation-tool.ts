@@ -1,5 +1,5 @@
 import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "@mariozechner/pi-coding-agent";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import { Container, Text } from "@mariozechner/pi-tui";
 import { isOpenAICodexModel } from "../adapter/codex-model.ts";
 
@@ -78,11 +78,13 @@ export function rewriteNativeImageGenerationTool(payload: unknown, model: Extens
 }
 
 export function createImageGenerationTool(): ToolDefinition<typeof IMAGE_GENERATION_PARAMETERS> {
+	const description =
+		"Generate an image. Native openai-codex image_generation outputs are saved under `.pi/openai-codex-images/` and mirrored to `.pi/openai-codex-images/latest.png`. Use `view_image` only when pixel-level inspection is necessary.";
 	return {
 		name: "image_generation",
 		label: "image_generation",
-		description: "Generate an image.",
-		promptSnippet: "Generate an image.",
+		description,
+		promptSnippet: description,
 		parameters: IMAGE_GENERATION_PARAMETERS,
 		prepareArguments: () => ({}),
 		async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {

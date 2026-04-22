@@ -66,7 +66,7 @@ test("rewriteNativeImageGenerationTool leaves unsupported models and providers u
 
 test("createImageGenerationTool exposes a strict zero-argument schema", () => {
 	const tool = createImageGenerationTool();
-	assert.equal(tool.description, "Generate an image.");
+	assert.match(tool.description, /^Generate an image\. Native openai-codex image_generation outputs are saved under `\.pi\/openai-codex-images\/` and mirrored to `\.pi\/openai-codex-images\/latest\.png`\./);
 	assert.equal(tool.promptSnippet, tool.description);
 	assert.equal((tool.parameters as { type?: unknown }).type, "object");
 	assert.equal((tool.parameters as { additionalProperties?: unknown }).additionalProperties, false);

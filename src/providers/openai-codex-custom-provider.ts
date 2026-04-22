@@ -1,11 +1,6 @@
-import { readFileSync } from "node:fs";
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Box, Image, Spacer, Text } from "@mariozechner/pi-tui";
 import {
-	calculateCost,
 	createAssistantMessageEventStream,
 	getEnvApiKey,
 	supportsXhigh,
@@ -26,14 +21,27 @@ import {
 const DEFAULT_CODEX_BASE_URL = "https://chatgpt.com/backend-api";
 const JWT_CLAIM_PATH = "https://api.openai.com/auth";
 export const IMAGE_SAVE_DISPLAY_MESSAGE_TYPE = "codex-image-generation-display";
-export const IMAGE_SAVE_CONTEXT_MESSAGE_TYPE = "codex-image-generation-context";
 export const WEB_SEARCH_ACTIVITY_MESSAGE_TYPE = "codex-web-search-activity";
-const OPENAI_CODEX_IMAGE_DIR = path.join(".pi", "openai-codex-images");
+const OPENAI_CODEX_IMAGE_DIR = ".pi/openai-codex-images";
 const OPENAI_CODEX_LATEST_IMAGE_NAME = "latest.png";
 const MAX_RETRIES = 3;
 const BASE_DELAY_MS = 1000;
 const CODEX_TOOL_CALL_PROVIDERS = new Set(["openai", "openai-codex", "opencode"]);
 const CODEX_RESPONSE_STATUSES = new Set(["completed", "incomplete", "failed", "cancelled", "queued", "in_progress"]);
+const OPENAI_BETA_RESPONSES_WEBSOCKETS = "responses_websockets=2026-02-06";
+const SESSION_WEBSOCKET_CACHE_TTL_MS = 5 * 60 * 1000;
+const dynamicImport = (specifier: string) => import(specifier);
+let _os: { platform(): string; release(): string; arch(): string } | null = null;
+
+if (typeof process !== "undefined" && (process.versions?.node || process.versions?.bun)) {
+	dynamicImport("node:os")
+		.then((module) => {
+			_os = module;
+		})
+		.catch(() => {
+			_os = null;
+		});
+}
 
 interface SavedGeneratedImage {
 	absolutePath: string;
@@ -55,6 +63,10 @@ interface PendingImageDisplay {
 	imageData: { data: string; mimeType: string };
 }
 
+interface QueuedImageActivity extends PendingImageDisplay {
+	kind: "image";
+}
+
 interface SurfacedWebSearch {
 	callId: string;
 	status?: string;
@@ -63,10 +75,41 @@ interface SurfacedWebSearch {
 	sources: Array<{ title?: string; url: string }>;
 }
 
+interface QueuedWebSearchActivity {
+	kind: "web-search";
+	search: SurfacedWebSearch;
+}
+
+type PendingActivity = QueuedImageActivity | QueuedWebSearchActivity;
+
 interface CachedImagePreview {
 	data: string;
 	mimeType: string;
 }
+
+interface WebSocketLike {
+	readyState?: number;
+	send(data: string): void;
+	close(code?: number, reason?: string): void;
+	addEventListener(type: string, listener: (event: unknown) => void): void;
+	removeEventListener(type: string, listener: (event: unknown) => void): void;
+}
+
+interface WebSocketConstructorLike {
+	new (url: string, options?: { headers?: Record<string, string> } | string | string[]): WebSocketLike;
+}
+
+interface SessionWebSocketCacheEntry {
+	socket: WebSocketLike;
+	busy: boolean;
+	idleTimer?: ReturnType<typeof setTimeout>;
+}
+
+let webSocketConstructorPromise: Promise<WebSocketConstructorLike | null> | undefined;
+let fsPromisesPromise: Promise<typeof import("node:fs/promises")> | undefined;
+const workspaceRootCache = new Map<string, Promise<string>>();
+
+const PATH_SEPARATOR = "/";
 
 interface ResponsesBody {
 	model: string;
@@ -105,6 +148,8 @@ interface ResponseEnvelope {
 
 type ServiceTier = ResponseCreateParamsStreaming["service_tier"];
 
+const websocketSessionCache = new Map<string, SessionWebSocketCacheEntry>();
+
 interface StreamEventShape {
 	type?: string;
 	response?: ResponseEnvelope;
@@ -137,31 +182,140 @@ function shortenFilePart(value: string | undefined, fallback: string): string {
 	return `${prefix}${body.slice(0, 8)}-${body.slice(-4)}`;
 }
 
-export function getOpenAICodexImageDirectory(cwd: string): string {
-	return path.join(cwd, OPENAI_CODEX_IMAGE_DIR);
+function shortHash(str: string): string {
+	let h1 = 0xdeadbeef;
+	let h2 = 0x41c6ce57;
+	for (let i = 0; i < str.length; i++) {
+		const ch = str.charCodeAt(i);
+		h1 = Math.imul(h1 ^ ch, 2654435761);
+		h2 = Math.imul(h2 ^ ch, 1597334677);
+	}
+	h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+	h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+	return (h2 >>> 0).toString(36) + (h1 >>> 0).toString(36);
 }
 
-export function getOpenAICodexImagePath(cwd: string, _responseId: string | undefined, callId: string, outputFormat?: string): string {
+function normalizePath(value: string): string {
+	if (!value) return ".";
+	const normalized = value.replace(/\/+/g, PATH_SEPARATOR);
+	if (normalized === PATH_SEPARATOR) return normalized;
+	return normalized.replace(/\/+$/g, "") || PATH_SEPARATOR;
+}
+
+function joinPaths(...parts: string[]): string {
+	if (parts.length === 0) return ".";
+	let result = parts[0] ?? "";
+	for (let i = 1; i < parts.length; i++) {
+		const part = parts[i];
+		if (!part) continue;
+		if (!result || result.endsWith(PATH_SEPARATOR)) {
+			result += part.replace(/^\/+/, "");
+		} else {
+			result += `${PATH_SEPARATOR}${part.replace(/^\/+/, "")}`;
+		}
+	}
+	return normalizePath(result);
+}
+
+function dirnamePath(value: string): string {
+	const normalized = normalizePath(value);
+	if (normalized === PATH_SEPARATOR) return PATH_SEPARATOR;
+	const index = normalized.lastIndexOf(PATH_SEPARATOR);
+	if (index < 0) return ".";
+	if (index === 0) return PATH_SEPARATOR;
+	return normalized.slice(0, index);
+}
+
+function splitPathSegments(value: string): string[] {
+	const normalized = normalizePath(value);
+	if (normalized === PATH_SEPARATOR) return [];
+	return normalized.replace(/^\/+/, "").split(PATH_SEPARATOR).filter(Boolean);
+}
+
+function relativePath(from: string, to: string): string {
+	const normalizedFrom = normalizePath(from);
+	const normalizedTo = normalizePath(to);
+	if (normalizedFrom === normalizedTo) return "";
+	const fromSegments = splitPathSegments(normalizedFrom);
+	const toSegments = splitPathSegments(normalizedTo);
+	let shared = 0;
+	while (shared < fromSegments.length && shared < toSegments.length && fromSegments[shared] === toSegments[shared]) {
+		shared++;
+	}
+	const upSegments = new Array(fromSegments.length - shared).fill("..");
+	const downSegments = toSegments.slice(shared);
+	return [...upSegments, ...downSegments].join(PATH_SEPARATOR);
+}
+
+async function getNodeFsPromises(): Promise<typeof import("node:fs/promises")> {
+	if (!fsPromisesPromise) {
+		fsPromisesPromise = dynamicImport("node:fs/promises") as Promise<typeof import("node:fs/promises")>;
+	}
+	return fsPromisesPromise;
+}
+
+function getNodeFsSync(): { readFileSync(path: string): Buffer } | null {
+	if (typeof process === "undefined" || !(process.versions?.node || process.versions?.bun)) {
+		return null;
+	}
+	const builtinProcess = process as typeof process & { getBuiltinModule?: (specifier: string) => unknown };
+	if (typeof builtinProcess.getBuiltinModule !== "function") {
+		return null;
+	}
+	try {
+		const module = builtinProcess.getBuiltinModule("node:fs") as { readFileSync?: (path: string) => Buffer } | undefined;
+		return typeof module?.readFileSync === "function" ? { readFileSync: module.readFileSync } : null;
+	} catch {
+		return null;
+	}
+}
+
+async function pathExists(value: string): Promise<boolean> {
+	try {
+		const fs = await getNodeFsPromises();
+		await fs.access(value);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+async function resolveWorkspaceRoot(cwd: string): Promise<string> {
+	const normalizedCwd = normalizePath(cwd);
+	const cached = workspaceRootCache.get(normalizedCwd);
+	if (cached) return cached;
+
+	const promise = (async () => {
+		let current = normalizedCwd;
+		while (true) {
+			if (await pathExists(joinPaths(current, ".git"))) {
+				return current;
+			}
+			const parent = dirnamePath(current);
+			if (parent === current || parent === ".") {
+				return normalizedCwd;
+			}
+			current = parent;
+		}
+	})();
+
+	workspaceRootCache.set(normalizedCwd, promise);
+	return promise;
+}
+
+export function getOpenAICodexImageDirectory(cwd: string): string {
+	return joinPaths(cwd, OPENAI_CODEX_IMAGE_DIR);
+}
+
+export function getOpenAICodexImagePath(cwd: string, responseId: string | undefined, callId: string, outputFormat?: string): string {
 	const ext = (outputFormat ?? "png").toLowerCase();
 	const safeCallId = shortenFilePart(callId, "image");
-	return path.join(getOpenAICodexImageDirectory(cwd), `${safeCallId}.${ext}`);
+	const safeResponseId = shortenFilePart(responseId, "response");
+	return joinPaths(getOpenAICodexImageDirectory(cwd), `${safeCallId}-${safeResponseId}.${ext}`);
 }
 
 export function getOpenAICodexLatestImagePath(cwd: string): string {
-	return path.join(getOpenAICodexImageDirectory(cwd), OPENAI_CODEX_LATEST_IMAGE_NAME);
-}
-
-export function buildGeneratedImageContextMessage(savedImages: SavedGeneratedImage[]): string {
-	if (savedImages.length === 1) {
-		const image = savedImages[0];
-		return `Native image_generation output saved to \`${image.relativePath}\`.`;
-	}
-
-	const lines = [
-		"Native image_generation outputs saved to workspace-local files:",
-		...savedImages.map((image) => `- \`${image.relativePath}\``),
-	];
-	return lines.join("\n");
+	return joinPaths(getOpenAICodexImageDirectory(cwd), OPENAI_CODEX_LATEST_IMAGE_NAME);
 }
 
 export function buildGeneratedImageDisplayText(savedImage: SavedGeneratedImage, options?: { expanded?: boolean }): string {
@@ -177,23 +331,26 @@ export async function saveOpenAICodexGeneratedImage(
 	cwd: string,
 	image: { responseId?: string; callId: string; result: string; outputFormat?: string; revisedPrompt?: string },
 ): Promise<SavedGeneratedImage> {
+	const workspaceRoot = await resolveWorkspaceRoot(cwd);
+	const fs = await getNodeFsPromises();
 	const bytes = Buffer.from(image.result, "base64");
-	const absolutePath = getOpenAICodexImagePath(cwd, image.responseId, image.callId, image.outputFormat);
-	const latestAbsolutePath = getOpenAICodexLatestImagePath(cwd);
-	await fs.mkdir(path.dirname(absolutePath), { recursive: true });
+	const absolutePath = getOpenAICodexImagePath(workspaceRoot, image.responseId, image.callId, image.outputFormat);
+	const latestAbsolutePath = getOpenAICodexLatestImagePath(workspaceRoot);
+	await fs.mkdir(dirnamePath(absolutePath), { recursive: true });
 	await fs.writeFile(absolutePath, bytes);
 	await fs.writeFile(latestAbsolutePath, bytes);
 
-	const relative = path.relative(cwd, absolutePath);
-	const latestRelative = path.relative(cwd, latestAbsolutePath);
-	const relativePath = relative && !relative.startsWith("..") ? relative : absolutePath;
-	const latestRelativePath = latestRelative && !latestRelative.startsWith("..") ? latestRelative : latestAbsolutePath;
+	const relativeFilePath = relativePath(workspaceRoot, absolutePath);
+	const latestRelativeFilePath = relativePath(workspaceRoot, latestAbsolutePath);
+	const relativePathValue = relativeFilePath && !relativeFilePath.startsWith("..") ? relativeFilePath : absolutePath;
+	const latestRelativePathValue =
+		latestRelativeFilePath && !latestRelativeFilePath.startsWith("..") ? latestRelativeFilePath : latestAbsolutePath;
 
 	return {
 		absolutePath,
-		relativePath,
+		relativePath: relativePathValue,
 		latestAbsolutePath,
-		latestRelativePath,
+		latestRelativePath: latestRelativePathValue,
 		responseId: image.responseId,
 		callId: image.callId,
 		outputFormat: (image.outputFormat ?? "png").toLowerCase(),
@@ -222,16 +379,39 @@ function resolveCodexUrl(baseUrl: string | undefined): string {
 	return `${normalized}/codex/responses`;
 }
 
+function resolveCodexWebSocketUrl(baseUrl: string | undefined): string {
+	const url = new URL(resolveCodexUrl(baseUrl));
+	if (url.protocol === "https:") url.protocol = "wss:";
+	if (url.protocol === "http:") url.protocol = "ws:";
+	return url.toString();
+}
+
 function headersToRecord(headers: Headers): Record<string, string> {
 	return Object.fromEntries(headers.entries());
 }
 
-function buildSSEHeaders(
+function buildWebSocketCacheKey(url: string, headers: Headers, sessionId: string | undefined): string | undefined {
+	if (!sessionId) return undefined;
+	const headerFingerprint = Object.entries(headersToRecord(headers))
+		.map(([key, value]) => [key.toLowerCase(), value] as const)
+		.sort(([a], [b]) => a.localeCompare(b))
+		.map(([key, value]) => `${key}:${value}`)
+		.join("\n");
+	return `${sessionId}:${shortHash(`${url}\n${headerFingerprint}`)}`;
+}
+
+function createCodexRequestId(): string {
+	if (typeof globalThis.crypto?.randomUUID === "function") {
+		return globalThis.crypto.randomUUID();
+	}
+	return `codex_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function buildBaseCodexHeaders(
 	modelHeaders: Record<string, string> | undefined,
 	additionalHeaders: Record<string, string> | undefined,
 	accountId: string,
 	token: string,
-	sessionId: string | undefined,
 ): Headers {
 	const headers = new Headers(modelHeaders);
 	for (const [key, value] of Object.entries(additionalHeaders ?? {})) {
@@ -241,16 +421,45 @@ function buildSSEHeaders(
 	headers.set("Authorization", `Bearer ${token}`);
 	headers.set("chatgpt-account-id", accountId);
 	headers.set("originator", "pi");
+	headers.set("User-Agent", _os ? `pi (${_os.platform()} ${_os.release()}; ${_os.arch()})` : "pi (browser)");
+	return headers;
+}
+
+function buildSSEHeaders(
+	modelHeaders: Record<string, string> | undefined,
+	additionalHeaders: Record<string, string> | undefined,
+	accountId: string,
+	token: string,
+	sessionId: string | undefined,
+): Headers {
+	const headers = buildBaseCodexHeaders(modelHeaders, additionalHeaders, accountId, token);
 	headers.set("OpenAI-Beta", "responses=experimental");
 	headers.set("accept", "text/event-stream");
 	headers.set("content-type", "application/json");
-	headers.set("User-Agent", `pi (${os.platform()} ${os.release()}; ${os.arch()})`);
 
 	if (sessionId) {
 		headers.set("session_id", sessionId);
 		headers.set("x-client-request-id", sessionId);
 	}
 
+	return headers;
+}
+
+function buildWebSocketHeaders(
+	modelHeaders: Record<string, string> | undefined,
+	additionalHeaders: Record<string, string> | undefined,
+	accountId: string,
+	token: string,
+	requestId: string,
+): Headers {
+	const headers = buildBaseCodexHeaders(modelHeaders, additionalHeaders, accountId, token);
+	headers.delete("accept");
+	headers.delete("content-type");
+	headers.delete("OpenAI-Beta");
+	headers.delete("openai-beta");
+	headers.set("OpenAI-Beta", OPENAI_BETA_RESPONSES_WEBSOCKETS);
+	headers.set("x-client-request-id", requestId);
+	headers.set("session_id", requestId);
 	return headers;
 }
 
@@ -288,17 +497,6 @@ function resolveCodexServiceTier(responseServiceTier: ServiceTier, requestServic
 		return requestServiceTier;
 	}
 	return responseServiceTier ?? requestServiceTier;
-}
-
-function createContextMessage(savedImages: SavedGeneratedImage[]): any {
-	return {
-		role: "custom",
-		customType: IMAGE_SAVE_CONTEXT_MESSAGE_TYPE,
-		content: buildGeneratedImageContextMessage(savedImages),
-		display: false,
-		details: { savedImages },
-		timestamp: Date.now(),
-	};
 }
 
 function buildRequestBody<TApi extends Api>(model: Model<TApi>, context: Context, options?: SimpleStreamOptions): ResponsesBody {
@@ -386,6 +584,7 @@ async function* parseSSE(response: Response): AsyncIterable<StreamEventShape> {
 			if (done) break;
 
 			buffer += decoder.decode(value, { stream: true });
+			buffer = buffer.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
 			let idx = buffer.indexOf("\n\n");
 			while (idx !== -1) {
 				const chunk = buffer.slice(0, idx);
@@ -418,6 +617,335 @@ async function* parseSSE(response: Response): AsyncIterable<StreamEventShape> {
 		} catch {
 			// ignore lock release errors
 		}
+	}
+}
+
+async function getWebSocketConstructor(): Promise<WebSocketConstructorLike | null> {
+	if (webSocketConstructorPromise) {
+		return webSocketConstructorPromise;
+	}
+
+	webSocketConstructorPromise = (async () => {
+		const globalCtor = (globalThis as typeof globalThis & { WebSocket?: WebSocketConstructorLike }).WebSocket;
+		if (typeof process === "undefined" || !(process.versions?.node || process.versions?.bun)) {
+			return typeof globalCtor === "function" ? globalCtor : null;
+		}
+
+		try {
+			const wsModule = (await dynamicImport("ws")) as { WebSocket?: WebSocketConstructorLike; default?: WebSocketConstructorLike };
+			const ctor = wsModule.WebSocket ?? wsModule.default;
+			return typeof ctor === "function" ? ctor : null;
+		} catch {
+			return typeof globalCtor === "function" ? globalCtor : null;
+		}
+	})();
+
+	return webSocketConstructorPromise;
+}
+
+function getWebSocketReadyState(socket: WebSocketLike): number | undefined {
+	return typeof socket.readyState === "number" ? socket.readyState : undefined;
+}
+
+function isWebSocketReusable(socket: WebSocketLike): boolean {
+	const readyState = getWebSocketReadyState(socket);
+	return readyState === undefined || readyState === 1;
+}
+
+function closeWebSocketSilently(socket: WebSocketLike, code = 1000, reason = "done"): void {
+	try {
+		socket.close(code, reason);
+	} catch {
+		// ignore close errors
+	}
+}
+
+function scheduleSessionWebSocketExpiry(cacheKey: string, entry: SessionWebSocketCacheEntry): void {
+	if (entry.idleTimer) {
+		clearTimeout(entry.idleTimer);
+	}
+	entry.idleTimer = setTimeout(() => {
+		if (entry.busy) return;
+		closeWebSocketSilently(entry.socket, 1000, "idle_timeout");
+		websocketSessionCache.delete(cacheKey);
+	}, SESSION_WEBSOCKET_CACHE_TTL_MS);
+}
+
+function extractWebSocketError(event: unknown): Error {
+	if (event && typeof event === "object" && "message" in event) {
+		const message = (event as { message?: unknown }).message;
+		if (typeof message === "string" && message.length > 0) {
+			return new Error(message);
+		}
+	}
+	return new Error("WebSocket error");
+}
+
+function extractWebSocketCloseError(event: unknown): Error {
+	if (event && typeof event === "object") {
+		const code = "code" in event ? (event as { code?: unknown }).code : undefined;
+		const reason = "reason" in event ? (event as { reason?: unknown }).reason : undefined;
+		const codeText = typeof code === "number" ? ` ${code}` : "";
+		const reasonText = typeof reason === "string" && reason.length > 0 ? ` ${reason}` : "";
+		return new Error(`WebSocket closed${codeText}${reasonText}`.trim());
+	}
+	return new Error("WebSocket closed");
+}
+
+async function connectWebSocket(url: string, headers: Headers, signal: AbortSignal | undefined): Promise<WebSocketLike> {
+	const WebSocketCtor = await getWebSocketConstructor();
+	if (!WebSocketCtor) {
+		throw new Error("WebSocket transport is not available in this runtime");
+	}
+
+	const wsHeaders = headersToRecord(headers);
+
+	return new Promise((resolve, reject) => {
+		let settled = false;
+		let socket: WebSocketLike;
+		const isNodeLike = typeof process !== "undefined" && !!(process.versions?.node || process.versions?.bun);
+
+		try {
+			socket = isNodeLike ? new WebSocketCtor(url, { headers: wsHeaders }) : new WebSocketCtor(url);
+		} catch (error) {
+			reject(error instanceof Error ? error : new Error(String(error)));
+			return;
+		}
+
+		const onOpen = () => {
+			if (settled) return;
+			settled = true;
+			cleanup();
+			resolve(socket);
+		};
+		const onError = (event: unknown) => {
+			if (settled) return;
+			settled = true;
+			cleanup();
+			reject(extractWebSocketError(event));
+		};
+		const onClose = (event: unknown) => {
+			if (settled) return;
+			settled = true;
+			cleanup();
+			reject(extractWebSocketCloseError(event));
+		};
+		const onAbort = () => {
+			if (settled) return;
+			settled = true;
+			cleanup();
+			socket.close(1000, "aborted");
+			reject(new Error("Request was aborted"));
+		};
+
+		const cleanup = () => {
+			socket.removeEventListener("open", onOpen);
+			socket.removeEventListener("error", onError);
+			socket.removeEventListener("close", onClose);
+			signal?.removeEventListener("abort", onAbort);
+		};
+
+		socket.addEventListener("open", onOpen);
+		socket.addEventListener("error", onError);
+		socket.addEventListener("close", onClose);
+		signal?.addEventListener("abort", onAbort);
+	});
+}
+
+async function acquireWebSocket(
+	url: string,
+	headers: Headers,
+	sessionId: string | undefined,
+	signal: AbortSignal | undefined,
+): Promise<{ socket: WebSocketLike; release: (options?: { keep?: boolean }) => void }> {
+	const cacheKey = buildWebSocketCacheKey(url, headers, sessionId);
+	if (!cacheKey) {
+		const socket = await connectWebSocket(url, headers, signal);
+		return {
+			socket,
+			release: ({ keep } = {}) => {
+				if (keep === false) {
+					closeWebSocketSilently(socket);
+					return;
+				}
+				closeWebSocketSilently(socket);
+			},
+		};
+	}
+
+	const cached = websocketSessionCache.get(cacheKey);
+	if (cached) {
+		if (cached.idleTimer) {
+			clearTimeout(cached.idleTimer);
+			cached.idleTimer = undefined;
+		}
+
+		if (!cached.busy && isWebSocketReusable(cached.socket)) {
+			cached.busy = true;
+			return {
+				socket: cached.socket,
+				release: ({ keep } = {}) => {
+					if (!keep || !isWebSocketReusable(cached.socket)) {
+						closeWebSocketSilently(cached.socket);
+						websocketSessionCache.delete(cacheKey);
+						return;
+					}
+					cached.busy = false;
+					scheduleSessionWebSocketExpiry(cacheKey, cached);
+				},
+			};
+		}
+
+		if (cached.busy) {
+			const socket = await connectWebSocket(url, headers, signal);
+			return {
+				socket,
+				release: () => {
+					closeWebSocketSilently(socket);
+				},
+			};
+		}
+
+		if (!isWebSocketReusable(cached.socket)) {
+			closeWebSocketSilently(cached.socket);
+			websocketSessionCache.delete(cacheKey);
+		}
+	}
+
+	const socket = await connectWebSocket(url, headers, signal);
+	const entry: SessionWebSocketCacheEntry = { socket, busy: true };
+	websocketSessionCache.set(cacheKey, entry);
+	return {
+		socket,
+		release: ({ keep } = {}) => {
+			if (!keep || !isWebSocketReusable(entry.socket)) {
+				closeWebSocketSilently(entry.socket);
+				if (entry.idleTimer) clearTimeout(entry.idleTimer);
+				if (websocketSessionCache.get(cacheKey) === entry) {
+					websocketSessionCache.delete(cacheKey);
+				}
+				return;
+			}
+			entry.busy = false;
+			scheduleSessionWebSocketExpiry(cacheKey, entry);
+		},
+	};
+}
+
+async function decodeWebSocketData(data: unknown): Promise<string | null> {
+	if (typeof data === "string") return data;
+	if (data instanceof ArrayBuffer) {
+		return new TextDecoder().decode(new Uint8Array(data));
+	}
+	if (ArrayBuffer.isView(data)) {
+		return new TextDecoder().decode(new Uint8Array(data.buffer, data.byteOffset, data.byteLength));
+	}
+	if (data && typeof data === "object" && "arrayBuffer" in data) {
+		const arrayBuffer = await (data as { arrayBuffer: () => Promise<ArrayBuffer> }).arrayBuffer();
+		return new TextDecoder().decode(new Uint8Array(arrayBuffer));
+	}
+	return null;
+}
+
+async function* parseWebSocket(socket: WebSocketLike, signal: AbortSignal | undefined): AsyncIterable<StreamEventShape> {
+	const queue: StreamEventShape[] = [];
+	let pending: (() => void) | null = null;
+	let done = false;
+	let failed: Error | null = null;
+	let sawCompletion = false;
+	let pendingMessages = 0;
+	let messageChain = Promise.resolve();
+
+	const wake = () => {
+		if (!pending) return;
+		const resolve = pending;
+		pending = null;
+		resolve();
+	};
+
+	const onMessage = (event: unknown) => {
+		pendingMessages++;
+		messageChain = messageChain
+			.then(async () => {
+				if (!event || typeof event !== "object" || !("data" in event)) return;
+				const text = await decodeWebSocketData((event as { data?: unknown }).data);
+				if (!text) return;
+				try {
+					const parsed = JSON.parse(text) as StreamEventShape;
+					const type = typeof parsed.type === "string" ? parsed.type : "";
+					if (type === "response.completed" || type === "response.done" || type === "response.incomplete") {
+						sawCompletion = true;
+						done = true;
+					}
+					queue.push(parsed);
+				} catch {
+					// ignore malformed websocket messages
+				}
+			})
+			.catch((error: unknown) => {
+				failed = error instanceof Error ? error : new Error(String(error));
+				done = true;
+			})
+			.finally(() => {
+				pendingMessages--;
+				wake();
+			});
+	};
+
+	const onError = (event: unknown) => {
+		failed = extractWebSocketError(event);
+		done = true;
+		wake();
+	};
+
+	const onClose = (event: unknown) => {
+		if (sawCompletion) {
+			done = true;
+			wake();
+			return;
+		}
+		if (!failed) {
+			failed = extractWebSocketCloseError(event);
+		}
+		done = true;
+		wake();
+	};
+
+	const onAbort = () => {
+		failed = new Error("Request was aborted");
+		done = true;
+		wake();
+	};
+
+	socket.addEventListener("message", onMessage);
+	socket.addEventListener("error", onError);
+	socket.addEventListener("close", onClose);
+	signal?.addEventListener("abort", onAbort);
+
+	try {
+		while (true) {
+			if (signal?.aborted) {
+				throw new Error("Request was aborted");
+			}
+			if (queue.length > 0) {
+				yield queue.shift() as StreamEventShape;
+				continue;
+			}
+			if (done && pendingMessages === 0) break;
+			await new Promise<void>((resolve) => {
+				pending = resolve;
+			});
+		}
+
+		if (failed) throw failed;
+		if (!sawCompletion) {
+			throw new Error("WebSocket stream closed before response.completed");
+		}
+	} finally {
+		socket.removeEventListener("message", onMessage);
+		socket.removeEventListener("error", onError);
+		socket.removeEventListener("close", onClose);
+		signal?.removeEventListener("abort", onAbort);
 	}
 }
 
@@ -523,6 +1051,68 @@ async function* captureGeneratedImages(
 	}
 }
 
+async function processCapturedResponsesStream<TApi extends Api>(
+	events: AsyncIterable<StreamEventShape>,
+	output: AssistantMessage,
+	stream: AssistantMessageEventStream,
+	model: Model<TApi>,
+	options: SimpleStreamOptions | undefined,
+	deps: {
+		getCurrentCwd: () => string;
+		onImageSaved?: (savedImage: SavedGeneratedImage, imageData: { data: string; mimeType: string }) => void;
+		onWebSearchCaptured?: (search: SurfacedWebSearch) => void;
+	},
+	requestPrompt: string | undefined,
+): Promise<void> {
+	const tappedEvents = captureGeneratedImages(mapCodexEvents(events), {
+		cwd: deps.getCurrentCwd(),
+		requestPrompt,
+		onImageSaved: (image, imageData) => deps.onImageSaved?.(image, imageData),
+		onWebSearchCaptured: (search) => deps.onWebSearchCaptured?.(search),
+	});
+
+	await processResponsesStream(tappedEvents as AsyncIterable<never>, output, stream, model, {
+		serviceTier: (options as { serviceTier?: ServiceTier } | undefined)?.serviceTier,
+		resolveServiceTier: resolveCodexServiceTier,
+		applyServiceTierPricing,
+	});
+}
+
+async function processWebSocketStream<TApi extends Api>(
+	url: string,
+	body: ResponsesBody,
+	headers: Headers,
+	output: AssistantMessage,
+	stream: AssistantMessageEventStream,
+	model: Model<TApi>,
+	onStart: () => void,
+	options: SimpleStreamOptions | undefined,
+	deps: {
+		getCurrentCwd: () => string;
+		onImageSaved?: (savedImage: SavedGeneratedImage, imageData: { data: string; mimeType: string }) => void;
+		onWebSearchCaptured?: (search: SurfacedWebSearch) => void;
+	},
+	requestPrompt: string | undefined,
+): Promise<void> {
+	const { socket, release } = await acquireWebSocket(url, headers, options?.sessionId, options?.signal);
+	let keepConnection = true;
+
+	try {
+		socket.send(JSON.stringify({ type: "response.create", ...body }));
+		onStart();
+		stream.push({ type: "start", partial: output });
+		await processCapturedResponsesStream(parseWebSocket(socket, options?.signal), output, stream, model, options, deps, requestPrompt);
+		if (options?.signal?.aborted) {
+			keepConnection = false;
+		}
+	} catch (error) {
+		keepConnection = false;
+		throw error;
+	} finally {
+		release({ keep: keepConnection });
+	}
+}
+
 function extractWebSearch(item: StreamEventShape["item"]): SurfacedWebSearch | undefined {
 	if (!item || item.type !== "web_search_call") return undefined;
 	const callId = typeof item.id === "string" ? item.id : undefined;
@@ -605,9 +1195,11 @@ export function buildWebSearchSummaryText(searches: SurfacedWebSearch[]): string
 function loadCachedImagePreview(savedImage: SavedGeneratedImage, imagePreviewCache: Map<string, CachedImagePreview>): CachedImagePreview | undefined {
 	const cached = imagePreviewCache.get(savedImage.absolutePath);
 	if (cached) return cached;
+	const fs = getNodeFsSync();
+	if (!fs) return undefined;
 	try {
 		const preview = {
-			data: readFileSync(savedImage.absolutePath).toString("base64"),
+			data: fs.readFileSync(savedImage.absolutePath).toString("base64"),
 			mimeType: `image/${savedImage.outputFormat}`,
 		};
 		imagePreviewCache.set(savedImage.absolutePath, preview);
@@ -649,8 +1241,32 @@ function createErrorMessage(message: AssistantMessage, error: unknown, aborted: 
 }
 
 function finalizeUsage<TApi extends Api>(model: Model<TApi>, output: AssistantMessage): void {
-	calculateCost(model, output.usage);
 	output.usage.cost.total = output.usage.cost.input + output.usage.cost.output + output.usage.cost.cacheRead + output.usage.cost.cacheWrite;
+}
+
+async function parseErrorResponse(response: Response): Promise<{ message: string; friendlyMessage?: string }> {
+	const raw = await response.text();
+	let message = raw || response.statusText || "Request failed";
+	let friendlyMessage: string | undefined;
+
+	try {
+		const parsed = JSON.parse(raw) as { error?: { code?: string; type?: string; plan_type?: string; resets_at?: number; message?: string } };
+		const err = parsed?.error;
+		if (err) {
+			const code = err.code || err.type || "";
+			if (/usage_limit_reached|usage_not_included|rate_limit_exceeded/i.test(code) || response.status === 429) {
+				const plan = err.plan_type ? ` (${err.plan_type.toLowerCase()} plan)` : "";
+				const mins = err.resets_at ? Math.max(0, Math.round((err.resets_at * 1000 - Date.now()) / 60000)) : undefined;
+				const when = mins !== undefined ? ` Try again in ~${mins} min.` : "";
+				friendlyMessage = `You have hit your ChatGPT usage limit${plan}.${when}`.trim();
+			}
+			message = err.message || friendlyMessage || message;
+		}
+	} catch {
+		// ignore malformed error bodies
+	}
+
+	return { message, friendlyMessage };
 }
 
 function createCodexStream<TApi extends Api>(
@@ -682,8 +1298,42 @@ function createCodexStream<TApi extends Api>(
 				body = nextBody as ResponsesBody;
 			}
 
-			const headers = buildSSEHeaders(model.headers, options?.headers, accountId, apiKey, options?.sessionId);
+			const websocketRequestId = options?.sessionId || createCodexRequestId();
+			const sseHeaders = buildSSEHeaders(model.headers, options?.headers, accountId, apiKey, options?.sessionId);
+			const websocketHeaders = buildWebSocketHeaders(model.headers, options?.headers, accountId, apiKey, websocketRequestId);
 			const bodyJson = JSON.stringify(body);
+			const transport = options?.transport || "sse";
+
+			if (transport !== "sse") {
+				let websocketStarted = false;
+				try {
+					await processWebSocketStream(
+						resolveCodexWebSocketUrl(model.baseUrl),
+						body,
+						websocketHeaders,
+						output,
+						stream,
+						model,
+						() => {
+							websocketStarted = true;
+						},
+						options,
+						deps,
+						requestPrompt,
+					);
+					if (options?.signal?.aborted) {
+						throw new Error("Request was aborted");
+					}
+					finalizeUsage(model, output);
+					stream.push({ type: "done", reason: output.stopReason as "stop" | "length" | "toolUse", message: output });
+					stream.end();
+					return;
+				} catch (error) {
+					if (transport === "websocket" || websocketStarted) {
+						throw error;
+					}
+				}
+			}
 
 			let response: Response | undefined;
 			let lastError: Error | undefined;
@@ -696,7 +1346,7 @@ function createCodexStream<TApi extends Api>(
 				try {
 					response = await fetch(resolveCodexUrl(model.baseUrl), {
 						method: "POST",
-						headers,
+						headers: sseHeaders,
 						body: bodyJson,
 						signal: options?.signal,
 					});
@@ -713,14 +1363,19 @@ function createCodexStream<TApi extends Api>(
 						continue;
 					}
 
-					throw new Error(errorText || `${response.status} ${response.statusText}`);
+					const fakeResponse = new Response(errorText, {
+						status: response.status,
+						statusText: response.statusText,
+					});
+					const info = await parseErrorResponse(fakeResponse);
+					throw new Error(info.friendlyMessage || info.message);
 				} catch (error) {
 					if (error instanceof Error && (error.name === "AbortError" || error.message === "Request was aborted")) {
 						throw new Error("Request was aborted");
 					}
 
 					lastError = error instanceof Error ? error : new Error(String(error));
-					if (attempt < MAX_RETRIES) {
+					if (attempt < MAX_RETRIES && !lastError.message.includes("usage limit")) {
 						await sleep(BASE_DELAY_MS * 2 ** attempt, options?.signal);
 						continue;
 					}
@@ -737,19 +1392,7 @@ function createCodexStream<TApi extends Api>(
 			}
 
 			stream.push({ type: "start", partial: output });
-
-			const tappedEvents = captureGeneratedImages(mapCodexEvents(parseSSE(response)), {
-				cwd: deps.getCurrentCwd(),
-				requestPrompt,
-				onImageSaved: (image, imageData) => deps.onImageSaved?.(image, imageData),
-				onWebSearchCaptured: (search) => deps.onWebSearchCaptured?.(search),
-			});
-
-			await processResponsesStream(tappedEvents as AsyncIterable<never>, output, stream, model, {
-				serviceTier: (options as { serviceTier?: ServiceTier } | undefined)?.serviceTier,
-				resolveServiceTier: resolveCodexServiceTier,
-				applyServiceTierPricing,
-			});
+			await processCapturedResponsesStream(parseSSE(response), output, stream, model, options, deps, requestPrompt);
 			finalizeUsage(model, output);
 
 			if (options?.signal?.aborted) {
@@ -772,45 +1415,34 @@ function createCodexStream<TApi extends Api>(
 }
 
 export function registerOpenAICodexCustomProvider(pi: ExtensionAPI, options: { getCurrentCwd: () => string }): void {
-	const pendingImageDisplays: PendingImageDisplay[] = [];
-	const pendingImageContextNotes: SavedGeneratedImage[] = [];
-	const pendingWebSearches: SurfacedWebSearch[] = [];
+	const pendingActivities: PendingActivity[] = [];
 	const imagePreviewCache = new Map<string, CachedImagePreview>();
 	let pendingFlushTimer: ReturnType<typeof setTimeout> | undefined;
 
 	const flushPendingMessages = () => {
 		pendingFlushTimer = undefined;
+		const activities = pendingActivities.splice(0, pendingActivities.length);
 
-		const images = pendingImageDisplays.splice(0, pendingImageDisplays.length);
-		const searches = pendingWebSearches.splice(0, pendingWebSearches.length);
+		for (let index = 0; index < activities.length; index++) {
+			const activity = activities[index];
+			if (activity.kind === "image") {
+				imagePreviewCache.set(activity.savedImage.absolutePath, activity.imageData);
+				pi.sendMessage(
+					{
+						customType: IMAGE_SAVE_DISPLAY_MESSAGE_TYPE,
+						content: [{ type: "text", text: buildGeneratedImageDisplayText(activity.savedImage, { expanded: false }) }],
+						display: true,
+						details: { savedImages: [activity.savedImage] } satisfies ImageDisplayMessageDetails,
+					},
+					{ triggerTurn: false },
+				);
+				continue;
+			}
 
-		for (const { savedImage, imageData } of images) {
-			imagePreviewCache.set(savedImage.absolutePath, imageData);
-			pi.sendMessage(
-				{
-					customType: IMAGE_SAVE_DISPLAY_MESSAGE_TYPE,
-					content: [{ type: "text", text: buildGeneratedImageDisplayText(savedImage, { expanded: false }) }],
-					display: true,
-					details: { savedImages: [savedImage] } satisfies ImageDisplayMessageDetails,
-				},
-				{ triggerTurn: false },
-			);
-		}
-
-		if (pendingImageContextNotes.length > 0) {
-			const savedImages = pendingImageContextNotes.splice(0, pendingImageContextNotes.length);
-			pi.sendMessage(
-				{
-					customType: IMAGE_SAVE_CONTEXT_MESSAGE_TYPE,
-					content: buildGeneratedImageContextMessage(savedImages),
-					display: false,
-					details: { savedImages },
-				},
-				{ triggerTurn: false },
-			);
-		}
-
-		if (searches.length > 0) {
+			const searches = [activity.search];
+			while (index + 1 < activities.length && activities[index + 1]?.kind === "web-search") {
+				searches.push((activities[++index] as QueuedWebSearchActivity).search);
+			}
 			pi.sendMessage(
 				{
 					customType: WEB_SEARCH_ACTIVITY_MESSAGE_TYPE,
@@ -824,7 +1456,7 @@ export function registerOpenAICodexCustomProvider(pi: ExtensionAPI, options: { g
 	};
 
 	const schedulePendingMessageFlush = () => {
-		if (pendingFlushTimer || (pendingImageDisplays.length === 0 && pendingWebSearches.length === 0)) {
+		if (pendingFlushTimer || pendingActivities.length === 0) {
 			return;
 		}
 		pendingFlushTimer = setTimeout(flushPendingMessages, 0);
@@ -835,9 +1467,7 @@ export function registerOpenAICodexCustomProvider(pi: ExtensionAPI, options: { g
 			clearTimeout(pendingFlushTimer);
 			pendingFlushTimer = undefined;
 		}
-		pendingImageDisplays.length = 0;
-		pendingImageContextNotes.length = 0;
-		pendingWebSearches.length = 0;
+		pendingActivities.length = 0;
 		imagePreviewCache.clear();
 	};
 
@@ -847,11 +1477,10 @@ export function registerOpenAICodexCustomProvider(pi: ExtensionAPI, options: { g
 			createCodexStream(model, context, streamOptions, {
 				getCurrentCwd: options.getCurrentCwd,
 				onImageSaved: (savedImage, imageData) => {
-					pendingImageDisplays.push({ savedImage, imageData });
-					pendingImageContextNotes.push(savedImage);
+					pendingActivities.push({ kind: "image", savedImage, imageData });
 				},
 				onWebSearchCaptured: (search) => {
-					pendingWebSearches.push(search);
+					pendingActivities.push({ kind: "web-search", search });
 				},
 			}),
 	});
@@ -861,7 +1490,7 @@ export function registerOpenAICodexCustomProvider(pi: ExtensionAPI, options: { g
 	});
 
 	pi.on("session_shutdown", async () => {
-		if (pendingImageDisplays.length > 0 || pendingImageContextNotes.length > 0 || pendingWebSearches.length > 0) {
+		if (pendingActivities.length > 0) {
 			flushPendingMessages();
 		}
 		clearPendingMessages();
@@ -869,13 +1498,6 @@ export function registerOpenAICodexCustomProvider(pi: ExtensionAPI, options: { g
 
 	pi.on("agent_end", async () => {
 		schedulePendingMessageFlush();
-	});
-
-	pi.on("context", async (event) => {
-		if (pendingImageContextNotes.length === 0) return undefined;
-		return {
-			messages: [...event.messages, createContextMessage(pendingImageContextNotes)],
-		};
 	});
 
 	pi.registerMessageRenderer<ImageDisplayMessageDetails>(IMAGE_SAVE_DISPLAY_MESSAGE_TYPE, (message, options, theme) => {

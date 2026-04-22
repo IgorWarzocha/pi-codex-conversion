@@ -7,7 +7,7 @@ import {
 	type ExtensionContext,
 	type ToolDefinition,
 } from "@mariozechner/pi-coding-agent";
-import { Type, type TSchema } from "@sinclair/typebox";
+import { Type, type TSchema } from "typebox";
 import { Text } from "@mariozechner/pi-tui";
 
 const VIEW_IMAGE_UNSUPPORTED_MESSAGE = "view_image is not allowed because you do not support image inputs";

@@ -1,6 +1,6 @@
 {
   "name": "@howaboua/pi-codex-conversion",
-  "version": "1.0.19",
+  "version": "1.0.20",
   "description": "Codex-oriented tool and prompt adapter for pi coding agent",
   "type": "module",
   "repository": {
@@ -51,22 +51,24 @@
     "access": "public"
   },
   "peerDependencies": {
-    "@mariozechner/pi-ai": "^0.67.0",
-    "@mariozechner/pi-coding-agent": "^0.67.0",
-    "@mariozechner/pi-tui": "^0.67.0",
-    "@sinclair/typebox": "*"
+    "@mariozechner/pi-ai": "^0.69.0",
+    "@mariozechner/pi-coding-agent": "^0.69.0",
+    "@mariozechner/pi-tui": "^0.69.0",
+    "typebox": "^1.1.24"
   },
   "devDependencies": {
-    "@mariozechner/pi-ai": "^0.67.3",
-    "@mariozechner/pi-coding-agent": "^0.67.3",
-    "@mariozechner/pi-tui": "^0.67.3",
+    "@mariozechner/pi-ai": "^0.69.0",
+    "@mariozechner/pi-coding-agent": "^0.69.0",
+    "@mariozechner/pi-tui": "^0.69.0",
     "tsx": "^4.20.5",
+    "typebox": "^1.1.24",
     "typescript": "^5.9.3"
   },
   "dependencies": {
     "node-pty": "^1.1.0",
     "partial-json": "^0.1.7",
     "tree-sitter-bash": "^0.25.1",
-    "web-tree-sitter": "^0.26.7"
+    "web-tree-sitter": "^0.26.7",
+    "ws": "^8.20.0"
   }
 }

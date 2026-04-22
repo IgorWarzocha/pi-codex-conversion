@@ -4,7 +4,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
-	buildGeneratedImageContextMessage,
 	buildGeneratedImageDisplayText,
 	buildWebSearchActivityMessage,
 	buildWebSearchSummaryText,
@@ -15,7 +14,7 @@ import {
 
 test("getOpenAICodexImagePath saves images under the repo-local .pi/openai-codex-images directory", () => {
 	const filePath = getOpenAICodexImagePath("/repo", "resp_123", "ig_456", "png");
-	assert.equal(filePath, path.join("/repo", ".pi", "openai-codex-images", "ig_456.png"));
+	assert.equal(filePath, path.join("/repo", ".pi", "openai-codex-images", "ig_456-resp_123.png"));
 });
 
 test("getOpenAICodexImagePath shortens long codex ids for friendlier filenames", () => {
@@ -25,32 +24,13 @@ test("getOpenAICodexImagePath shortens long codex ids for friendlier filenames",
 		"ig_05d6d2731de96e7d0169e6d4bc910081918539a5b24943cd3c",
 		"png",
 	);
-	assert.equal(filePath, path.join("/repo", ".pi", "openai-codex-images", "ig_05d6d273-cd3c.png"));
+	assert.equal(filePath, path.join("/repo", ".pi", "openai-codex-images", "ig_05d6d273-cd3c-resp_05d6d273-4e9b.png"));
 });
-
-test("buildGeneratedImageContextMessage tells the agent only where the image was saved", () => {
-	assert.equal(
-		buildGeneratedImageContextMessage([
-			{
-				absolutePath: "/repo/.pi/openai-codex-images/ig_456.png",
-				relativePath: ".pi/openai-codex-images/ig_456.png",
-				latestAbsolutePath: "/repo/.pi/openai-codex-images/latest.png",
-				latestRelativePath: ".pi/openai-codex-images/latest.png",
-				responseId: "resp_123",
-				callId: "ig_456",
-				outputFormat: "png",
-				revisedPrompt: "A tiny red square icon",
-			},
-		]),
-		"Native image_generation output saved to `.pi/openai-codex-images/ig_456.png`.",
-	);
-});
-
 test("buildGeneratedImageDisplayText surfaces the prompt and saved filename to the user", () => {
 	assert.equal(
 		buildGeneratedImageDisplayText({
-			absolutePath: "/repo/.pi/openai-codex-images/ig_456.png",
-			relativePath: ".pi/openai-codex-images/ig_456.png",
+			absolutePath: "/repo/.pi/openai-codex-images/ig_456-resp_123.png",
+			relativePath: ".pi/openai-codex-images/ig_456-resp_123.png",
 			latestAbsolutePath: "/repo/.pi/openai-codex-images/latest.png",
 			latestRelativePath: ".pi/openai-codex-images/latest.png",
 			responseId: "resp_123",
@@ -58,13 +38,13 @@ test("buildGeneratedImageDisplayText surfaces the prompt and saved filename to t
 			outputFormat: "png",
 			revisedPrompt: "A tiny red square icon",
 		}),
-		"File: .pi/openai-codex-images/ig_456.png",
+		"File: .pi/openai-codex-images/ig_456-resp_123.png",
 	);
 	assert.equal(
 		buildGeneratedImageDisplayText(
 			{
-				absolutePath: "/repo/.pi/openai-codex-images/ig_456.png",
-				relativePath: ".pi/openai-codex-images/ig_456.png",
+				absolutePath: "/repo/.pi/openai-codex-images/ig_456-resp_123.png",
+				relativePath: ".pi/openai-codex-images/ig_456-resp_123.png",
 				latestAbsolutePath: "/repo/.pi/openai-codex-images/latest.png",
 				latestRelativePath: ".pi/openai-codex-images/latest.png",
 				responseId: "resp_123",
@@ -74,7 +54,7 @@ test("buildGeneratedImageDisplayText surfaces the prompt and saved filename to t
 			},
 			{ expanded: true },
 		),
-		"Prompt: A tiny red square icon\nFile: .pi/openai-codex-images/ig_456.png",
+		"Prompt: A tiny red square icon\nFile: .pi/openai-codex-images/ig_456-resp_123.png",
 	);
 });
 
@@ -133,11 +113,35 @@ test("saveOpenAICodexGeneratedImage writes the decoded image bytes into the work
 			outputFormat: "png",
 		});
 
-		assert.equal(saved.relativePath, path.join(".pi", "openai-codex-images", "ig_456.png"));
+		assert.equal(saved.relativePath, path.join(".pi", "openai-codex-images", "ig_456-resp_123.png"));
 		assert.equal(saved.latestRelativePath, path.join(".pi", "openai-codex-images", "latest.png"));
 		assert.deepEqual(await fs.readFile(saved.absolutePath), Buffer.from("png-bytes"));
 		assert.deepEqual(await fs.readFile(getOpenAICodexLatestImagePath(cwd)), Buffer.from("png-bytes"));
 	} finally {
 		await fs.rm(cwd, { recursive: true, force: true });
+	}
+});
+
+test("saveOpenAICodexGeneratedImage anchors generated images to the repo root when cwd is a subdirectory", async () => {
+	const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "pi-codex-image-root-"));
+	const nestedCwd = path.join(repoRoot, "packages", "feature");
+	const encoded = Buffer.from("png-bytes").toString("base64");
+
+	try {
+		await fs.mkdir(path.join(repoRoot, ".git"), { recursive: true });
+		await fs.mkdir(nestedCwd, { recursive: true });
+
+		const saved = await saveOpenAICodexGeneratedImage(nestedCwd, {
+			responseId: "resp_123",
+			callId: "ig_456",
+			result: encoded,
+			outputFormat: "png",
+		});
+
+		assert.equal(saved.absolutePath, path.join(repoRoot, ".pi", "openai-codex-images", "ig_456-resp_123.png"));
+		assert.equal(saved.relativePath, path.join(".pi", "openai-codex-images", "ig_456-resp_123.png"));
+		assert.deepEqual(await fs.readFile(saved.absolutePath), Buffer.from("png-bytes"));
+	} finally {
+		await fs.rm(repoRoot, { recursive: true, force: true });
 	}
 });
