@@ -35,6 +35,7 @@ const CODEX_TOOL_CALL_PROVIDERS = new Set(["openai", "openai-codex", "opencode"]
 const CODEX_RESPONSE_STATUSES = new Set(["completed", "incomplete", "failed", "cancelled", "queued", "in_progress"]);
 const OPENAI_BETA_RESPONSES_WEBSOCKETS = "responses_websockets=2026-02-06";
 const SESSION_WEBSOCKET_CACHE_TTL_MS = 5 * 60 * 1000;
+const dynamicImport = (specifier: string) => import(specifier);
 
 interface SavedGeneratedImage {
 	absolutePath: string;
@@ -86,6 +87,8 @@ interface SessionWebSocketCacheEntry {
 	busy: boolean;
 	idleTimer?: ReturnType<typeof setTimeout>;
 }
+
+let webSocketConstructorPromise: Promise<WebSocketConstructorLike | null> | undefined;
 
 interface ResponsesBody {
 	model: string;
@@ -473,6 +476,7 @@ async function* parseSSE(response: Response): AsyncIterable<StreamEventShape> {
 			if (done) break;
 
 			buffer += decoder.decode(value, { stream: true });
+			buffer = buffer.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
 			let idx = buffer.indexOf("\n\n");
 			while (idx !== -1) {
 				const chunk = buffer.slice(0, idx);
@@ -508,9 +512,26 @@ async function* parseSSE(response: Response): AsyncIterable<StreamEventShape> {
 	}
 }
 
-function getWebSocketConstructor(): WebSocketConstructorLike | null {
-	const ctor = (globalThis as typeof globalThis & { WebSocket?: WebSocketConstructorLike }).WebSocket;
-	return typeof ctor === "function" ? ctor : null;
+async function getWebSocketConstructor(): Promise<WebSocketConstructorLike | null> {
+	if (webSocketConstructorPromise) {
+		return webSocketConstructorPromise;
+	}
+
+	webSocketConstructorPromise = (async () => {
+		if (typeof process === "undefined" || !(process.versions?.node || process.versions?.bun)) {
+			return null;
+		}
+
+		try {
+			const wsModule = (await dynamicImport("ws")) as { WebSocket?: WebSocketConstructorLike; default?: WebSocketConstructorLike };
+			const ctor = wsModule.WebSocket ?? wsModule.default;
+			return typeof ctor === "function" ? ctor : null;
+		} catch {
+			return null;
+		}
+	})();
+
+	return webSocketConstructorPromise;
 }
 
 function getWebSocketReadyState(socket: WebSocketLike): number | undefined {
@@ -563,7 +584,7 @@ function extractWebSocketCloseError(event: unknown): Error {
 }
 
 async function connectWebSocket(url: string, headers: Headers, signal: AbortSignal | undefined): Promise<WebSocketLike> {
-	const WebSocketCtor = getWebSocketConstructor();
+	const WebSocketCtor = await getWebSocketConstructor();
 	if (!WebSocketCtor) {
 		throw new Error("WebSocket transport is not available in this runtime");
 	}
