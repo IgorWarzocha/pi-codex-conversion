@@ -5,7 +5,6 @@ import path from "node:path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Box, Image, Spacer, Text } from "@mariozechner/pi-tui";
 import {
-	calculateCost,
 	createAssistantMessageEventStream,
 	getEnvApiKey,
 	supportsXhigh,
@@ -34,6 +33,8 @@ const MAX_RETRIES = 3;
 const BASE_DELAY_MS = 1000;
 const CODEX_TOOL_CALL_PROVIDERS = new Set(["openai", "openai-codex", "opencode"]);
 const CODEX_RESPONSE_STATUSES = new Set(["completed", "incomplete", "failed", "cancelled", "queued", "in_progress"]);
+const OPENAI_BETA_RESPONSES_WEBSOCKETS = "responses_websockets=2026-02-06";
+const SESSION_WEBSOCKET_CACHE_TTL_MS = 5 * 60 * 1000;
 
 interface SavedGeneratedImage {
 	absolutePath: string;
@@ -66,6 +67,24 @@ interface SurfacedWebSearch {
 interface CachedImagePreview {
 	data: string;
 	mimeType: string;
+}
+
+interface WebSocketLike {
+	readyState?: number;
+	send(data: string): void;
+	close(code?: number, reason?: string): void;
+	addEventListener(type: string, listener: (event: unknown) => void): void;
+	removeEventListener(type: string, listener: (event: unknown) => void): void;
+}
+
+interface WebSocketConstructorLike {
+	new (url: string, options?: { headers?: Record<string, string> }): WebSocketLike;
+}
+
+interface SessionWebSocketCacheEntry {
+	socket: WebSocketLike;
+	busy: boolean;
+	idleTimer?: ReturnType<typeof setTimeout>;
 }
 
 interface ResponsesBody {
@@ -105,6 +124,8 @@ interface ResponseEnvelope {
 
 type ServiceTier = ResponseCreateParamsStreaming["service_tier"];
 
+const websocketSessionCache = new Map<string, SessionWebSocketCacheEntry>();
+
 interface StreamEventShape {
 	type?: string;
 	response?: ResponseEnvelope;
@@ -141,10 +162,11 @@ export function getOpenAICodexImageDirectory(cwd: string): string {
 	return path.join(cwd, OPENAI_CODEX_IMAGE_DIR);
 }
 
-export function getOpenAICodexImagePath(cwd: string, _responseId: string | undefined, callId: string, outputFormat?: string): string {
+export function getOpenAICodexImagePath(cwd: string, responseId: string | undefined, callId: string, outputFormat?: string): string {
 	const ext = (outputFormat ?? "png").toLowerCase();
 	const safeCallId = shortenFilePart(callId, "image");
-	return path.join(getOpenAICodexImageDirectory(cwd), `${safeCallId}.${ext}`);
+	const safeResponseId = shortenFilePart(responseId, "response");
+	return path.join(getOpenAICodexImageDirectory(cwd), `${safeCallId}-${safeResponseId}.${ext}`);
 }
 
 export function getOpenAICodexLatestImagePath(cwd: string): string {
@@ -222,16 +244,29 @@ function resolveCodexUrl(baseUrl: string | undefined): string {
 	return `${normalized}/codex/responses`;
 }
 
+function resolveCodexWebSocketUrl(baseUrl: string | undefined): string {
+	const url = new URL(resolveCodexUrl(baseUrl));
+	if (url.protocol === "https:") url.protocol = "wss:";
+	if (url.protocol === "http:") url.protocol = "ws:";
+	return url.toString();
+}
+
 function headersToRecord(headers: Headers): Record<string, string> {
 	return Object.fromEntries(headers.entries());
 }
 
-function buildSSEHeaders(
+function createCodexRequestId(): string {
+	if (typeof globalThis.crypto?.randomUUID === "function") {
+		return globalThis.crypto.randomUUID();
+	}
+	return `codex_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function buildBaseCodexHeaders(
 	modelHeaders: Record<string, string> | undefined,
 	additionalHeaders: Record<string, string> | undefined,
 	accountId: string,
 	token: string,
-	sessionId: string | undefined,
 ): Headers {
 	const headers = new Headers(modelHeaders);
 	for (const [key, value] of Object.entries(additionalHeaders ?? {})) {
@@ -241,16 +276,45 @@ function buildSSEHeaders(
 	headers.set("Authorization", `Bearer ${token}`);
 	headers.set("chatgpt-account-id", accountId);
 	headers.set("originator", "pi");
+	headers.set("User-Agent", `pi (${os.platform()} ${os.release()}; ${os.arch()})`);
+	return headers;
+}
+
+function buildSSEHeaders(
+	modelHeaders: Record<string, string> | undefined,
+	additionalHeaders: Record<string, string> | undefined,
+	accountId: string,
+	token: string,
+	sessionId: string | undefined,
+): Headers {
+	const headers = buildBaseCodexHeaders(modelHeaders, additionalHeaders, accountId, token);
 	headers.set("OpenAI-Beta", "responses=experimental");
 	headers.set("accept", "text/event-stream");
 	headers.set("content-type", "application/json");
-	headers.set("User-Agent", `pi (${os.platform()} ${os.release()}; ${os.arch()})`);
 
 	if (sessionId) {
 		headers.set("session_id", sessionId);
 		headers.set("x-client-request-id", sessionId);
 	}
 
+	return headers;
+}
+
+function buildWebSocketHeaders(
+	modelHeaders: Record<string, string> | undefined,
+	additionalHeaders: Record<string, string> | undefined,
+	accountId: string,
+	token: string,
+	requestId: string,
+): Headers {
+	const headers = buildBaseCodexHeaders(modelHeaders, additionalHeaders, accountId, token);
+	headers.delete("accept");
+	headers.delete("content-type");
+	headers.delete("OpenAI-Beta");
+	headers.delete("openai-beta");
+	headers.set("OpenAI-Beta", OPENAI_BETA_RESPONSES_WEBSOCKETS);
+	headers.set("x-client-request-id", requestId);
+	headers.set("session_id", requestId);
 	return headers;
 }
 
@@ -421,6 +485,305 @@ async function* parseSSE(response: Response): AsyncIterable<StreamEventShape> {
 	}
 }
 
+function getWebSocketConstructor(): WebSocketConstructorLike | null {
+	const ctor = (globalThis as typeof globalThis & { WebSocket?: WebSocketConstructorLike }).WebSocket;
+	return typeof ctor === "function" ? ctor : null;
+}
+
+function getWebSocketReadyState(socket: WebSocketLike): number | undefined {
+	return typeof socket.readyState === "number" ? socket.readyState : undefined;
+}
+
+function isWebSocketReusable(socket: WebSocketLike): boolean {
+	const readyState = getWebSocketReadyState(socket);
+	return readyState === undefined || readyState === 1;
+}
+
+function closeWebSocketSilently(socket: WebSocketLike, code = 1000, reason = "done"): void {
+	try {
+		socket.close(code, reason);
+	} catch {
+		// ignore close errors
+	}
+}
+
+function scheduleSessionWebSocketExpiry(sessionId: string, entry: SessionWebSocketCacheEntry): void {
+	if (entry.idleTimer) {
+		clearTimeout(entry.idleTimer);
+	}
+	entry.idleTimer = setTimeout(() => {
+		if (entry.busy) return;
+		closeWebSocketSilently(entry.socket, 1000, "idle_timeout");
+		websocketSessionCache.delete(sessionId);
+	}, SESSION_WEBSOCKET_CACHE_TTL_MS);
+}
+
+function extractWebSocketError(event: unknown): Error {
+	if (event && typeof event === "object" && "message" in event) {
+		const message = (event as { message?: unknown }).message;
+		if (typeof message === "string" && message.length > 0) {
+			return new Error(message);
+		}
+	}
+	return new Error("WebSocket error");
+}
+
+function extractWebSocketCloseError(event: unknown): Error {
+	if (event && typeof event === "object") {
+		const code = "code" in event ? (event as { code?: unknown }).code : undefined;
+		const reason = "reason" in event ? (event as { reason?: unknown }).reason : undefined;
+		const codeText = typeof code === "number" ? ` ${code}` : "";
+		const reasonText = typeof reason === "string" && reason.length > 0 ? ` ${reason}` : "";
+		return new Error(`WebSocket closed${codeText}${reasonText}`.trim());
+	}
+	return new Error("WebSocket closed");
+}
+
+async function connectWebSocket(url: string, headers: Headers, signal: AbortSignal | undefined): Promise<WebSocketLike> {
+	const WebSocketCtor = getWebSocketConstructor();
+	if (!WebSocketCtor) {
+		throw new Error("WebSocket transport is not available in this runtime");
+	}
+
+	const wsHeaders = headersToRecord(headers);
+	delete wsHeaders["OpenAI-Beta"];
+
+	return new Promise((resolve, reject) => {
+		let settled = false;
+		let socket: WebSocketLike;
+
+		try {
+			socket = new WebSocketCtor(url, { headers: wsHeaders });
+		} catch (error) {
+			reject(error instanceof Error ? error : new Error(String(error)));
+			return;
+		}
+
+		const onOpen = () => {
+			if (settled) return;
+			settled = true;
+			cleanup();
+			resolve(socket);
+		};
+		const onError = (event: unknown) => {
+			if (settled) return;
+			settled = true;
+			cleanup();
+			reject(extractWebSocketError(event));
+		};
+		const onClose = (event: unknown) => {
+			if (settled) return;
+			settled = true;
+			cleanup();
+			reject(extractWebSocketCloseError(event));
+		};
+		const onAbort = () => {
+			if (settled) return;
+			settled = true;
+			cleanup();
+			socket.close(1000, "aborted");
+			reject(new Error("Request was aborted"));
+		};
+
+		const cleanup = () => {
+			socket.removeEventListener("open", onOpen);
+			socket.removeEventListener("error", onError);
+			socket.removeEventListener("close", onClose);
+			signal?.removeEventListener("abort", onAbort);
+		};
+
+		socket.addEventListener("open", onOpen);
+		socket.addEventListener("error", onError);
+		socket.addEventListener("close", onClose);
+		signal?.addEventListener("abort", onAbort);
+	});
+}
+
+async function acquireWebSocket(
+	url: string,
+	headers: Headers,
+	sessionId: string | undefined,
+	signal: AbortSignal | undefined,
+): Promise<{ socket: WebSocketLike; release: (options?: { keep?: boolean }) => void }> {
+	if (!sessionId) {
+		const socket = await connectWebSocket(url, headers, signal);
+		return {
+			socket,
+			release: ({ keep } = {}) => {
+				if (keep === false) {
+					closeWebSocketSilently(socket);
+					return;
+				}
+				closeWebSocketSilently(socket);
+			},
+		};
+	}
+
+	const cached = websocketSessionCache.get(sessionId);
+	if (cached) {
+		if (cached.idleTimer) {
+			clearTimeout(cached.idleTimer);
+			cached.idleTimer = undefined;
+		}
+
+		if (!cached.busy && isWebSocketReusable(cached.socket)) {
+			cached.busy = true;
+			return {
+				socket: cached.socket,
+				release: ({ keep } = {}) => {
+					if (!keep || !isWebSocketReusable(cached.socket)) {
+						closeWebSocketSilently(cached.socket);
+						websocketSessionCache.delete(sessionId);
+						return;
+					}
+					cached.busy = false;
+					scheduleSessionWebSocketExpiry(sessionId, cached);
+				},
+			};
+		}
+
+		if (cached.busy) {
+			const socket = await connectWebSocket(url, headers, signal);
+			return {
+				socket,
+				release: () => {
+					closeWebSocketSilently(socket);
+				},
+			};
+		}
+
+		if (!isWebSocketReusable(cached.socket)) {
+			closeWebSocketSilently(cached.socket);
+			websocketSessionCache.delete(sessionId);
+		}
+	}
+
+	const socket = await connectWebSocket(url, headers, signal);
+	const entry: SessionWebSocketCacheEntry = { socket, busy: true };
+	websocketSessionCache.set(sessionId, entry);
+	return {
+		socket,
+		release: ({ keep } = {}) => {
+			if (!keep || !isWebSocketReusable(entry.socket)) {
+				closeWebSocketSilently(entry.socket);
+				if (entry.idleTimer) clearTimeout(entry.idleTimer);
+				if (websocketSessionCache.get(sessionId) === entry) {
+					websocketSessionCache.delete(sessionId);
+				}
+				return;
+			}
+			entry.busy = false;
+			scheduleSessionWebSocketExpiry(sessionId, entry);
+		},
+	};
+}
+
+async function decodeWebSocketData(data: unknown): Promise<string | null> {
+	if (typeof data === "string") return data;
+	if (data instanceof ArrayBuffer) {
+		return new TextDecoder().decode(new Uint8Array(data));
+	}
+	if (ArrayBuffer.isView(data)) {
+		return new TextDecoder().decode(new Uint8Array(data.buffer, data.byteOffset, data.byteLength));
+	}
+	if (data && typeof data === "object" && "arrayBuffer" in data) {
+		const arrayBuffer = await (data as { arrayBuffer: () => Promise<ArrayBuffer> }).arrayBuffer();
+		return new TextDecoder().decode(new Uint8Array(arrayBuffer));
+	}
+	return null;
+}
+
+async function* parseWebSocket(socket: WebSocketLike, signal: AbortSignal | undefined): AsyncIterable<StreamEventShape> {
+	const queue: StreamEventShape[] = [];
+	let pending: (() => void) | null = null;
+	let done = false;
+	let failed: Error | null = null;
+	let sawCompletion = false;
+
+	const wake = () => {
+		if (!pending) return;
+		const resolve = pending;
+		pending = null;
+		resolve();
+	};
+
+	const onMessage = (event: unknown) => {
+		void (async () => {
+			if (!event || typeof event !== "object" || !("data" in event)) return;
+			const text = await decodeWebSocketData((event as { data?: unknown }).data);
+			if (!text) return;
+			try {
+				const parsed = JSON.parse(text) as StreamEventShape;
+				const type = typeof parsed.type === "string" ? parsed.type : "";
+				if (type === "response.completed" || type === "response.done" || type === "response.incomplete") {
+					sawCompletion = true;
+					done = true;
+				}
+				queue.push(parsed);
+				wake();
+			} catch {
+				// ignore malformed websocket messages
+			}
+		})();
+	};
+
+	const onError = (event: unknown) => {
+		failed = extractWebSocketError(event);
+		done = true;
+		wake();
+	};
+
+	const onClose = (event: unknown) => {
+		if (sawCompletion) {
+			done = true;
+			wake();
+			return;
+		}
+		if (!failed) {
+			failed = extractWebSocketCloseError(event);
+		}
+		done = true;
+		wake();
+	};
+
+	const onAbort = () => {
+		failed = new Error("Request was aborted");
+		done = true;
+		wake();
+	};
+
+	socket.addEventListener("message", onMessage);
+	socket.addEventListener("error", onError);
+	socket.addEventListener("close", onClose);
+	signal?.addEventListener("abort", onAbort);
+
+	try {
+		while (true) {
+			if (signal?.aborted) {
+				throw new Error("Request was aborted");
+			}
+			if (queue.length > 0) {
+				yield queue.shift() as StreamEventShape;
+				continue;
+			}
+			if (done) break;
+			await new Promise<void>((resolve) => {
+				pending = resolve;
+			});
+		}
+
+		if (failed) throw failed;
+		if (!sawCompletion) {
+			throw new Error("WebSocket stream closed before response.completed");
+		}
+	} finally {
+		socket.removeEventListener("message", onMessage);
+		socket.removeEventListener("error", onError);
+		socket.removeEventListener("close", onClose);
+		signal?.removeEventListener("abort", onAbort);
+	}
+}
+
 async function* mapCodexEvents(events: AsyncIterable<StreamEventShape>): AsyncIterable<StreamEventShape> {
 	for await (const event of events) {
 		const type = typeof event.type === "string" ? event.type : undefined;
@@ -520,6 +883,68 @@ async function* captureGeneratedImages(
 		}
 
 		yield event;
+	}
+}
+
+async function processCapturedResponsesStream<TApi extends Api>(
+	events: AsyncIterable<StreamEventShape>,
+	output: AssistantMessage,
+	stream: AssistantMessageEventStream,
+	model: Model<TApi>,
+	options: SimpleStreamOptions | undefined,
+	deps: {
+		getCurrentCwd: () => string;
+		onImageSaved?: (savedImage: SavedGeneratedImage, imageData: { data: string; mimeType: string }) => void;
+		onWebSearchCaptured?: (search: SurfacedWebSearch) => void;
+	},
+	requestPrompt: string | undefined,
+): Promise<void> {
+	const tappedEvents = captureGeneratedImages(mapCodexEvents(events), {
+		cwd: deps.getCurrentCwd(),
+		requestPrompt,
+		onImageSaved: (image, imageData) => deps.onImageSaved?.(image, imageData),
+		onWebSearchCaptured: (search) => deps.onWebSearchCaptured?.(search),
+	});
+
+	await processResponsesStream(tappedEvents as AsyncIterable<never>, output, stream, model, {
+		serviceTier: (options as { serviceTier?: ServiceTier } | undefined)?.serviceTier,
+		resolveServiceTier: resolveCodexServiceTier,
+		applyServiceTierPricing,
+	});
+}
+
+async function processWebSocketStream<TApi extends Api>(
+	url: string,
+	body: ResponsesBody,
+	headers: Headers,
+	output: AssistantMessage,
+	stream: AssistantMessageEventStream,
+	model: Model<TApi>,
+	onStart: () => void,
+	options: SimpleStreamOptions | undefined,
+	deps: {
+		getCurrentCwd: () => string;
+		onImageSaved?: (savedImage: SavedGeneratedImage, imageData: { data: string; mimeType: string }) => void;
+		onWebSearchCaptured?: (search: SurfacedWebSearch) => void;
+	},
+	requestPrompt: string | undefined,
+): Promise<void> {
+	const { socket, release } = await acquireWebSocket(url, headers, options?.sessionId, options?.signal);
+	let keepConnection = true;
+
+	try {
+		socket.send(JSON.stringify({ type: "response.create", ...body }));
+		onStart();
+		stream.push({ type: "start", partial: output });
+		await processCapturedResponsesStream(parseWebSocket(socket, options?.signal), output, stream, model, options, deps, requestPrompt);
+		if (options?.signal?.aborted) {
+			keepConnection = false;
+		}
+	} catch (error) {
+		keepConnection = false;
+		throw error;
+	} finally {
+		release({ keep: keepConnection });
 	}
 }
 
@@ -649,8 +1074,32 @@ function createErrorMessage(message: AssistantMessage, error: unknown, aborted: 
 }
 
 function finalizeUsage<TApi extends Api>(model: Model<TApi>, output: AssistantMessage): void {
-	calculateCost(model, output.usage);
 	output.usage.cost.total = output.usage.cost.input + output.usage.cost.output + output.usage.cost.cacheRead + output.usage.cost.cacheWrite;
+}
+
+async function parseErrorResponse(response: Response): Promise<{ message: string; friendlyMessage?: string }> {
+	const raw = await response.text();
+	let message = raw || response.statusText || "Request failed";
+	let friendlyMessage: string | undefined;
+
+	try {
+		const parsed = JSON.parse(raw) as { error?: { code?: string; type?: string; plan_type?: string; resets_at?: number; message?: string } };
+		const err = parsed?.error;
+		if (err) {
+			const code = err.code || err.type || "";
+			if (/usage_limit_reached|usage_not_included|rate_limit_exceeded/i.test(code) || response.status === 429) {
+				const plan = err.plan_type ? ` (${err.plan_type.toLowerCase()} plan)` : "";
+				const mins = err.resets_at ? Math.max(0, Math.round((err.resets_at * 1000 - Date.now()) / 60000)) : undefined;
+				const when = mins !== undefined ? ` Try again in ~${mins} min.` : "";
+				friendlyMessage = `You have hit your ChatGPT usage limit${plan}.${when}`.trim();
+			}
+			message = err.message || friendlyMessage || message;
+		}
+	} catch {
+		// ignore malformed error bodies
+	}
+
+	return { message, friendlyMessage };
 }
 
 function createCodexStream<TApi extends Api>(
@@ -682,8 +1131,42 @@ function createCodexStream<TApi extends Api>(
 				body = nextBody as ResponsesBody;
 			}
 
-			const headers = buildSSEHeaders(model.headers, options?.headers, accountId, apiKey, options?.sessionId);
+			const websocketRequestId = options?.sessionId || createCodexRequestId();
+			const sseHeaders = buildSSEHeaders(model.headers, options?.headers, accountId, apiKey, options?.sessionId);
+			const websocketHeaders = buildWebSocketHeaders(model.headers, options?.headers, accountId, apiKey, websocketRequestId);
 			const bodyJson = JSON.stringify(body);
+			const transport = options?.transport || "sse";
+
+			if (transport !== "sse") {
+				let websocketStarted = false;
+				try {
+					await processWebSocketStream(
+						resolveCodexWebSocketUrl(model.baseUrl),
+						body,
+						websocketHeaders,
+						output,
+						stream,
+						model,
+						() => {
+							websocketStarted = true;
+						},
+						options,
+						deps,
+						requestPrompt,
+					);
+					if (options?.signal?.aborted) {
+						throw new Error("Request was aborted");
+					}
+					finalizeUsage(model, output);
+					stream.push({ type: "done", reason: output.stopReason as "stop" | "length" | "toolUse", message: output });
+					stream.end();
+					return;
+				} catch (error) {
+					if (transport === "websocket" || websocketStarted) {
+						throw error;
+					}
+				}
+			}
 
 			let response: Response | undefined;
 			let lastError: Error | undefined;
@@ -696,7 +1179,7 @@ function createCodexStream<TApi extends Api>(
 				try {
 					response = await fetch(resolveCodexUrl(model.baseUrl), {
 						method: "POST",
-						headers,
+						headers: sseHeaders,
 						body: bodyJson,
 						signal: options?.signal,
 					});
@@ -713,14 +1196,19 @@ function createCodexStream<TApi extends Api>(
 						continue;
 					}
 
-					throw new Error(errorText || `${response.status} ${response.statusText}`);
+					const fakeResponse = new Response(errorText, {
+						status: response.status,
+						statusText: response.statusText,
+					});
+					const info = await parseErrorResponse(fakeResponse);
+					throw new Error(info.friendlyMessage || info.message);
 				} catch (error) {
 					if (error instanceof Error && (error.name === "AbortError" || error.message === "Request was aborted")) {
 						throw new Error("Request was aborted");
 					}
 
 					lastError = error instanceof Error ? error : new Error(String(error));
-					if (attempt < MAX_RETRIES) {
+					if (attempt < MAX_RETRIES && !lastError.message.includes("usage limit")) {
 						await sleep(BASE_DELAY_MS * 2 ** attempt, options?.signal);
 						continue;
 					}
@@ -737,19 +1225,7 @@ function createCodexStream<TApi extends Api>(
 			}
 
 			stream.push({ type: "start", partial: output });
-
-			const tappedEvents = captureGeneratedImages(mapCodexEvents(parseSSE(response)), {
-				cwd: deps.getCurrentCwd(),
-				requestPrompt,
-				onImageSaved: (image, imageData) => deps.onImageSaved?.(image, imageData),
-				onWebSearchCaptured: (search) => deps.onWebSearchCaptured?.(search),
-			});
-
-			await processResponsesStream(tappedEvents as AsyncIterable<never>, output, stream, model, {
-				serviceTier: (options as { serviceTier?: ServiceTier } | undefined)?.serviceTier,
-				resolveServiceTier: resolveCodexServiceTier,
-				applyServiceTierPricing,
-			});
+			await processCapturedResponsesStream(parseSSE(response), output, stream, model, options, deps, requestPrompt);
 			finalizeUsage(model, output);
 
 			if (options?.signal?.aborted) {

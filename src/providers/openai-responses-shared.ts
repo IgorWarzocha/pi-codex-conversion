@@ -185,6 +185,8 @@ function transformMessages(
 		result.push(msg);
 	}
 
+	insertSyntheticToolResults();
+
 	return result;
 }
 
