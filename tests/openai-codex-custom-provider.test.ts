@@ -4,7 +4,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
-	buildGeneratedImageContextMessage,
 	buildGeneratedImageDisplayText,
 	buildWebSearchActivityMessage,
 	buildWebSearchSummaryText,
@@ -27,25 +26,6 @@ test("getOpenAICodexImagePath shortens long codex ids for friendlier filenames",
 	);
 	assert.equal(filePath, path.join("/repo", ".pi", "openai-codex-images", "ig_05d6d273-cd3c-resp_05d6d273-4e9b.png"));
 });
-
-test("buildGeneratedImageContextMessage tells the agent only where the image was saved", () => {
-	assert.equal(
-		buildGeneratedImageContextMessage([
-			{
-				absolutePath: "/repo/.pi/openai-codex-images/ig_456-resp_123.png",
-				relativePath: ".pi/openai-codex-images/ig_456-resp_123.png",
-				latestAbsolutePath: "/repo/.pi/openai-codex-images/latest.png",
-				latestRelativePath: ".pi/openai-codex-images/latest.png",
-				responseId: "resp_123",
-				callId: "ig_456",
-				outputFormat: "png",
-				revisedPrompt: "A tiny red square icon",
-			},
-		]),
-		"Native image_generation output saved to `.pi/openai-codex-images/ig_456-resp_123.png`.",
-	);
-});
-
 test("buildGeneratedImageDisplayText surfaces the prompt and saved filename to the user", () => {
 	assert.equal(
 		buildGeneratedImageDisplayText({

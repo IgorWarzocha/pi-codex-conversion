@@ -25,7 +25,6 @@ import {
 const DEFAULT_CODEX_BASE_URL = "https://chatgpt.com/backend-api";
 const JWT_CLAIM_PATH = "https://api.openai.com/auth";
 export const IMAGE_SAVE_DISPLAY_MESSAGE_TYPE = "codex-image-generation-display";
-export const IMAGE_SAVE_CONTEXT_MESSAGE_TYPE = "codex-image-generation-context";
 export const WEB_SEARCH_ACTIVITY_MESSAGE_TYPE = "codex-web-search-activity";
 const OPENAI_CODEX_IMAGE_DIR = path.join(".pi", "openai-codex-images");
 const OPENAI_CODEX_LATEST_IMAGE_NAME = "latest.png";
@@ -187,19 +186,6 @@ export function getOpenAICodexImagePath(cwd: string, responseId: string | undefi
 
 export function getOpenAICodexLatestImagePath(cwd: string): string {
 	return path.join(getOpenAICodexImageDirectory(cwd), OPENAI_CODEX_LATEST_IMAGE_NAME);
-}
-
-export function buildGeneratedImageContextMessage(savedImages: SavedGeneratedImage[]): string {
-	if (savedImages.length === 1) {
-		const image = savedImages[0];
-		return `Native image_generation output saved to \`${image.relativePath}\`.`;
-	}
-
-	const lines = [
-		"Native image_generation outputs saved to workspace-local files:",
-		...savedImages.map((image) => `- \`${image.relativePath}\``),
-	];
-	return lines.join("\n");
 }
 
 export function buildGeneratedImageDisplayText(savedImage: SavedGeneratedImage, options?: { expanded?: boolean }): string {
@@ -378,17 +364,6 @@ function resolveCodexServiceTier(responseServiceTier: ServiceTier, requestServic
 		return requestServiceTier;
 	}
 	return responseServiceTier ?? requestServiceTier;
-}
-
-function createContextMessage(savedImages: SavedGeneratedImage[]): any {
-	return {
-		role: "custom",
-		customType: IMAGE_SAVE_CONTEXT_MESSAGE_TYPE,
-		content: buildGeneratedImageContextMessage(savedImages),
-		display: false,
-		details: { savedImages },
-		timestamp: Date.now(),
-	};
 }
 
 function buildRequestBody<TApi extends Api>(model: Model<TApi>, context: Context, options?: SimpleStreamOptions): ResponsesBody {
@@ -1304,7 +1279,6 @@ function createCodexStream<TApi extends Api>(
 
 export function registerOpenAICodexCustomProvider(pi: ExtensionAPI, options: { getCurrentCwd: () => string }): void {
 	const pendingImageDisplays: PendingImageDisplay[] = [];
-	const pendingImageContextNotes: SavedGeneratedImage[] = [];
 	const pendingWebSearches: SurfacedWebSearch[] = [];
 	const imagePreviewCache = new Map<string, CachedImagePreview>();
 	let pendingFlushTimer: ReturnType<typeof setTimeout> | undefined;
@@ -1323,19 +1297,6 @@ export function registerOpenAICodexCustomProvider(pi: ExtensionAPI, options: { g
 					content: [{ type: "text", text: buildGeneratedImageDisplayText(savedImage, { expanded: false }) }],
 					display: true,
 					details: { savedImages: [savedImage] } satisfies ImageDisplayMessageDetails,
-				},
-				{ triggerTurn: false },
-			);
-		}
-
-		if (pendingImageContextNotes.length > 0) {
-			const savedImages = pendingImageContextNotes.splice(0, pendingImageContextNotes.length);
-			pi.sendMessage(
-				{
-					customType: IMAGE_SAVE_CONTEXT_MESSAGE_TYPE,
-					content: buildGeneratedImageContextMessage(savedImages),
-					display: false,
-					details: { savedImages },
 				},
 				{ triggerTurn: false },
 			);
@@ -1367,7 +1328,6 @@ export function registerOpenAICodexCustomProvider(pi: ExtensionAPI, options: { g
 			pendingFlushTimer = undefined;
 		}
 		pendingImageDisplays.length = 0;
-		pendingImageContextNotes.length = 0;
 		pendingWebSearches.length = 0;
 		imagePreviewCache.clear();
 	};
@@ -1379,7 +1339,6 @@ export function registerOpenAICodexCustomProvider(pi: ExtensionAPI, options: { g
 				getCurrentCwd: options.getCurrentCwd,
 				onImageSaved: (savedImage, imageData) => {
 					pendingImageDisplays.push({ savedImage, imageData });
-					pendingImageContextNotes.push(savedImage);
 				},
 				onWebSearchCaptured: (search) => {
 					pendingWebSearches.push(search);
@@ -1392,7 +1351,7 @@ export function registerOpenAICodexCustomProvider(pi: ExtensionAPI, options: { g
 	});
 
 	pi.on("session_shutdown", async () => {
-		if (pendingImageDisplays.length > 0 || pendingImageContextNotes.length > 0 || pendingWebSearches.length > 0) {
+		if (pendingImageDisplays.length > 0 || pendingWebSearches.length > 0) {
 			flushPendingMessages();
 		}
 		clearPendingMessages();
@@ -1400,13 +1359,6 @@ export function registerOpenAICodexCustomProvider(pi: ExtensionAPI, options: { g
 
 	pi.on("agent_end", async () => {
 		schedulePendingMessageFlush();
-	});
-
-	pi.on("context", async (event) => {
-		if (pendingImageContextNotes.length === 0) return undefined;
-		return {
-			messages: [...event.messages, createContextMessage(pendingImageContextNotes)],
-		};
 	});
 
 	pi.registerMessageRenderer<ImageDisplayMessageDetails>(IMAGE_SAVE_DISPLAY_MESSAGE_TYPE, (message, options, theme) => {

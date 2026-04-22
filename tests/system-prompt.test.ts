@@ -58,6 +58,7 @@ test("buildCodexSystemPrompt preserves Pi-composed sections and adds a narrow Co
 	assert.match(prompt, /- For short or non-interactive commands, prefer the default `exec_command` wait instead of a tiny `yield_time_ms` that forces an extra follow-up call\./);
 	assert.match(prompt, /- When polling a running exec session with empty `chars`, wait meaningfully between polls and do not repeatedly poll by reflex\./);
 	assert.match(prompt, /- Do not request `tty` unless interactive terminal behavior is required\./);
+	assert.match(prompt, /- Native `image_generation` outputs are saved under `\.pi\/openai-codex-images\/` and mirrored to `\.pi\/openai-codex-images\/latest\.png`\./);
 });
 
 test("buildCodexSystemPrompt appends fallback guidance when the base prompt has no Guidelines section", () => {
