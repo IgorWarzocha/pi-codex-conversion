@@ -26,6 +26,11 @@ test("getOpenAICodexImagePath shortens long codex ids for friendlier filenames",
 	);
 	assert.equal(filePath, path.join("/repo", ".pi", "openai-codex-images", "ig_05d6d273-cd3c-resp_05d6d273-4e9b.png"));
 });
+
+test("getOpenAICodexImagePath falls back to png for unsafe image output formats", () => {
+	const filePath = getOpenAICodexImagePath("/repo", "resp_123", "ig_456", "../../evil");
+	assert.equal(filePath, path.join("/repo", ".pi", "openai-codex-images", "ig_456-resp_123.png"));
+});
 test("buildGeneratedImageDisplayText surfaces the prompt and saved filename to the user", () => {
 	assert.equal(
 		buildGeneratedImageDisplayText({
