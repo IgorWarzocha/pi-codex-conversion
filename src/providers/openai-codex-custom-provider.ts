@@ -465,7 +465,9 @@ function buildWebSocketHeaders(
 
 function clampReasoningEffort(modelId: string, effort: string): string {
 	const id = modelId.includes("/") ? (modelId.split("/").pop() ?? modelId) : modelId;
-	if ((id.startsWith("gpt-5.2") || id.startsWith("gpt-5.3") || id.startsWith("gpt-5.4")) && effort === "minimal") return "low";
+	const gpt5MinorMatch = /^gpt-5\.(\d+)/.exec(id);
+	const gpt5Minor = gpt5MinorMatch ? Number.parseInt(gpt5MinorMatch[1], 10) : undefined;
+	if (gpt5Minor !== undefined && gpt5Minor >= 2 && effort === "minimal") return "low";
 	if (id === "gpt-5.1" && effort === "xhigh") return "high";
 	if (id === "gpt-5.1-codex-mini") return effort === "high" || effort === "xhigh" ? "high" : "medium";
 	return effort;
