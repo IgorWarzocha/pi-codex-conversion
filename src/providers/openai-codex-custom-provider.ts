@@ -118,7 +118,6 @@ interface ResponsesBody {
 	input: unknown;
 	text: { verbosity: string };
 	include: string[];
-	max_output_tokens?: number;
 	prompt_cache_key?: string;
 	tool_choice: "auto";
 	parallel_tool_calls: boolean;
