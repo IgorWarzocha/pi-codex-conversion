@@ -453,11 +453,6 @@ export async function processResponsesStream<TApi extends Api>(
 					block: currentBlock,
 				});
 				stream.push({ type: "toolcall_start", contentIndex: blockIndex(), partial: output });
-			} else if (item.type === "image_generation_call") {
-				(output.content as InternalAssistantContent[]).push({
-					type: "image_generation_call",
-					item: item as ImageGenerationCallItem,
-				});
 			}
 		} else if (event.type === "response.reasoning_summary_part.added") {
 			const state = outputStates.get(event.output_index);
@@ -586,19 +581,10 @@ export async function processResponsesStream<TApi extends Api>(
 				stream.push({ type: "toolcall_end", contentIndex: toolCallIndex, toolCall, partial: output });
 				outputStates.delete(event.output_index);
 			} else if (item.type === "image_generation_call") {
-				const content = output.content as InternalAssistantContent[];
-				const existingIndex = typeof item.id === "string"
-					? content.findIndex((block) => isImageGenerationCallBlock(block) && block.item.id === item.id)
-					: -1;
-				const imageBlock: ImageGenerationCallBlock = {
+				(output.content as InternalAssistantContent[]).push({
 					type: "image_generation_call",
 					item: item as ImageGenerationCallItem,
-				};
-				if (existingIndex >= 0) {
-					content[existingIndex] = imageBlock;
-				} else {
-					content.push(imageBlock);
-				}
+				});
 				outputStates.delete(event.output_index);
 			}
 		} else if (event.type === "response.completed") {

@@ -187,3 +187,31 @@ test("processResponsesStream preserves image generation calls for later Response
 
 	assert.deepEqual(messages, [imageItem]);
 });
+
+test("processResponsesStream does not persist in-progress image generation calls", async () => {
+	const output = createAssistantOutput();
+
+	await processResponsesStream(
+		asAsyncIterable([
+			{ type: "response.created", response: { id: "resp_1" } },
+			{
+				type: "response.output_item.added",
+				output_index: 0,
+				item: { type: "image_generation_call", id: "ig_123", status: "in_progress" },
+			},
+			{
+				type: "response.completed",
+				response: {
+					id: "resp_1",
+					status: "completed",
+					usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0, input_tokens_details: { cached_tokens: 0 } },
+				},
+			},
+		]) as AsyncIterable<any>,
+		output as any,
+		{ push: () => undefined } as any,
+		model,
+	);
+
+	assert.deepEqual((output.content as any[]).filter((block) => block.type === "image_generation_call"), []);
+});
