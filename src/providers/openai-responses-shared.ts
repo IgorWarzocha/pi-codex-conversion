@@ -6,6 +6,23 @@ import type { AssistantMessageEventStream } from "@mariozechner/pi-ai";
 type MessageRole = Context["messages"][number]["role"];
 type Message = Context["messages"][number];
 
+interface ImageGenerationCallItem {
+	type: "image_generation_call";
+	id?: string;
+	status?: string;
+	result?: string | null;
+	output_format?: string;
+	revised_prompt?: string;
+	[key: string]: unknown;
+}
+
+interface ImageGenerationCallBlock {
+	type: "image_generation_call";
+	item: ImageGenerationCallItem;
+}
+
+type InternalAssistantContent = Extract<Message, { role: "assistant" }>["content"][number] | ImageGenerationCallBlock;
+
 export interface OpenAIResponsesStreamOptions {
 	serviceTier?: ResponseCreateParamsStreaming["service_tier"];
 	resolveServiceTier?: (
@@ -53,6 +70,10 @@ function parseStreamingJson(partialJson: string): Record<string, unknown> {
 
 function sanitizeSurrogates(text: string): string {
 	return text.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, "");
+}
+
+function isImageGenerationCallBlock(block: InternalAssistantContent): block is ImageGenerationCallBlock {
+	return block.type === "image_generation_call" && block.item?.type === "image_generation_call";
 }
 
 const NON_VISION_USER_IMAGE_PLACEHOLDER = "(image omitted: model does not support images)";
@@ -108,7 +129,8 @@ function transformMessages(
 			const assistantMsg = msg;
 			const isSameModel =
 				assistantMsg.provider === model.provider && assistantMsg.api === model.api && assistantMsg.model === model.id;
-			const transformedContent = assistantMsg.content.flatMap((block) => {
+			const transformedContent = (assistantMsg.content as InternalAssistantContent[]).flatMap((block) => {
+				if (isImageGenerationCallBlock(block)) return block;
 				if (block.type === "thinking") {
 					if (block.redacted) return isSameModel ? block : [];
 					if (isSameModel && block.thinkingSignature) return block;
@@ -133,7 +155,7 @@ function transformMessages(
 				}
 				return block;
 			});
-			return { ...assistantMsg, content: transformedContent };
+			return { ...assistantMsg, content: transformedContent as Extract<Message, { role: "assistant" }>["content"] };
 		}
 		return msg;
 	});
@@ -263,8 +285,10 @@ export function convertResponsesMessages<TApi extends Api>(
 			const output: ResponseInput = [];
 			const isDifferentModel = msg.model !== model.id && msg.provider === model.provider && msg.api === model.api;
 			let assistantBlockIndex = 0;
-			for (const block of msg.content) {
-				if (block.type === "thinking") {
+			for (const block of msg.content as InternalAssistantContent[]) {
+				if (isImageGenerationCallBlock(block)) {
+					output.push(block.item as ResponseInput[number]);
+				} else if (block.type === "thinking") {
 					if (block.thinkingSignature) output.push(JSON.parse(block.thinkingSignature));
 				} else if (block.type === "text") {
 					const parsedSignature = parseTextSignature(block.textSignature);
@@ -429,6 +453,11 @@ export async function processResponsesStream<TApi extends Api>(
 					block: currentBlock,
 				});
 				stream.push({ type: "toolcall_start", contentIndex: blockIndex(), partial: output });
+			} else if (item.type === "image_generation_call") {
+				(output.content as InternalAssistantContent[]).push({
+					type: "image_generation_call",
+					item: item as ImageGenerationCallItem,
+				});
 			}
 		} else if (event.type === "response.reasoning_summary_part.added") {
 			const state = outputStates.get(event.output_index);
@@ -555,6 +584,21 @@ export async function processResponsesStream<TApi extends Api>(
 					})();
 				const toolCallIndex = state?.kind === "function_call" ? state.blockIndex : blockIndex();
 				stream.push({ type: "toolcall_end", contentIndex: toolCallIndex, toolCall, partial: output });
+				outputStates.delete(event.output_index);
+			} else if (item.type === "image_generation_call") {
+				const content = output.content as InternalAssistantContent[];
+				const existingIndex = typeof item.id === "string"
+					? content.findIndex((block) => isImageGenerationCallBlock(block) && block.item.id === item.id)
+					: -1;
+				const imageBlock: ImageGenerationCallBlock = {
+					type: "image_generation_call",
+					item: item as ImageGenerationCallItem,
+				};
+				if (existingIndex >= 0) {
+					content[existingIndex] = imageBlock;
+				} else {
+					content.push(imageBlock);
+				}
 				outputStates.delete(event.output_index);
 			}
 		} else if (event.type === "response.completed") {
