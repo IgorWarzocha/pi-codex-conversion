@@ -68,7 +68,6 @@
     "node-pty": "^1.1.0",
     "partial-json": "^0.1.7",
     "tree-sitter-bash": "^0.25.1",
-    "web-tree-sitter": "^0.26.7",
-    "ws": "^8.20.0"
+    "web-tree-sitter": "^0.26.7"
   }
 }

@@ -105,7 +105,6 @@ interface SessionWebSocketCacheEntry {
 	idleTimer?: ReturnType<typeof setTimeout>;
 }
 
-let webSocketConstructorPromise: Promise<WebSocketConstructorLike | null> | undefined;
 let fsPromisesPromise: Promise<typeof import("node:fs/promises")> | undefined;
 const workspaceRootCache = new Map<string, Promise<string>>();
 
@@ -622,27 +621,9 @@ async function* parseSSE(response: Response): AsyncIterable<StreamEventShape> {
 	}
 }
 
-async function getWebSocketConstructor(): Promise<WebSocketConstructorLike | null> {
-	if (webSocketConstructorPromise) {
-		return webSocketConstructorPromise;
-	}
-
-	webSocketConstructorPromise = (async () => {
-		const globalCtor = (globalThis as typeof globalThis & { WebSocket?: WebSocketConstructorLike }).WebSocket;
-		if (typeof process === "undefined" || !(process.versions?.node || process.versions?.bun)) {
-			return typeof globalCtor === "function" ? globalCtor : null;
-		}
-
-		try {
-			const wsModule = (await dynamicImport("ws")) as { WebSocket?: WebSocketConstructorLike; default?: WebSocketConstructorLike };
-			const ctor = wsModule.WebSocket ?? wsModule.default;
-			return typeof ctor === "function" ? ctor : null;
-		} catch {
-			return typeof globalCtor === "function" ? globalCtor : null;
-		}
-	})();
-
-	return webSocketConstructorPromise;
+function getWebSocketConstructor(): WebSocketConstructorLike | null {
+	const ctor = (globalThis as typeof globalThis & { WebSocket?: WebSocketConstructorLike }).WebSocket;
+	return typeof ctor === "function" ? ctor : null;
 }
 
 function getWebSocketReadyState(socket: WebSocketLike): number | undefined {
@@ -695,20 +676,20 @@ function extractWebSocketCloseError(event: unknown): Error {
 }
 
 async function connectWebSocket(url: string, headers: Headers, signal: AbortSignal | undefined): Promise<WebSocketLike> {
-	const WebSocketCtor = await getWebSocketConstructor();
+	const WebSocketCtor = getWebSocketConstructor();
 	if (!WebSocketCtor) {
 		throw new Error("WebSocket transport is not available in this runtime");
 	}
 
 	const wsHeaders = headersToRecord(headers);
+	delete wsHeaders["OpenAI-Beta"];
 
 	return new Promise((resolve, reject) => {
 		let settled = false;
 		let socket: WebSocketLike;
-		const isNodeLike = typeof process !== "undefined" && !!(process.versions?.node || process.versions?.bun);
 
 		try {
-			socket = isNodeLike ? new WebSocketCtor(url, { headers: wsHeaders }) : new WebSocketCtor(url);
+			socket = new WebSocketCtor(url, { headers: wsHeaders });
 		} catch (error) {
 			reject(error instanceof Error ? error : new Error(String(error)));
 			return;
