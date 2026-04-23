@@ -527,9 +527,10 @@ function buildRequestBody<TApi extends Api>(model: Model<TApi>, context: Context
 		parallel_tool_calls: true,
 	};
 
-	if (options?.maxTokens !== undefined) {
-		body.max_output_tokens = options.maxTokens;
-	}
+	// The Codex ChatGPT-backed endpoint rejects output-token cap fields with
+	// `Unsupported parameter: max_output_tokens`. Pi's branch summarizer passes
+	// `maxTokens`, so forwarding it breaks `/tree` summaries and extensions that
+	// use `ctx.navigateTree(..., { summarize: true })`.
 
 	if ((options as { temperature?: number } | undefined)?.temperature !== undefined) {
 		body.temperature = (options as { temperature?: number }).temperature;
