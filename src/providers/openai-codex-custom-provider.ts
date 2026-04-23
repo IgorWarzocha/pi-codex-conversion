@@ -105,7 +105,6 @@ interface SessionWebSocketCacheEntry {
 	idleTimer?: ReturnType<typeof setTimeout>;
 }
 
-let webSocketConstructorPromise: Promise<WebSocketConstructorLike | null> | undefined;
 let fsPromisesPromise: Promise<typeof import("node:fs/promises")> | undefined;
 const workspaceRootCache = new Map<string, Promise<string>>();
 
@@ -119,6 +118,7 @@ interface ResponsesBody {
 	input: unknown;
 	text: { verbosity: string };
 	include: string[];
+	max_output_tokens?: number;
 	prompt_cache_key?: string;
 	tool_choice: "auto";
 	parallel_tool_calls: boolean;
@@ -150,6 +150,8 @@ type ServiceTier = ResponseCreateParamsStreaming["service_tier"];
 
 const websocketSessionCache = new Map<string, SessionWebSocketCacheEntry>();
 
+class NonRetryableProviderError extends Error {}
+
 interface StreamEventShape {
 	type?: string;
 	response?: ResponseEnvelope;
@@ -180,6 +182,11 @@ function shortenFilePart(value: string | undefined, fallback: string): string {
 	const body = match?.[2] ?? safe;
 	if (body.length <= 12) return `${prefix}${body}`;
 	return `${prefix}${body.slice(0, 8)}-${body.slice(-4)}`;
+}
+
+function normalizeImageOutputFormat(value: string | undefined): string {
+	const format = (value ?? "png").toLowerCase();
+	return format === "png" || format === "jpg" || format === "jpeg" || format === "webp" ? format : "png";
 }
 
 function shortHash(str: string): string {
@@ -308,7 +315,7 @@ export function getOpenAICodexImageDirectory(cwd: string): string {
 }
 
 export function getOpenAICodexImagePath(cwd: string, responseId: string | undefined, callId: string, outputFormat?: string): string {
-	const ext = (outputFormat ?? "png").toLowerCase();
+	const ext = normalizeImageOutputFormat(outputFormat);
 	const safeCallId = shortenFilePart(callId, "image");
 	const safeResponseId = shortenFilePart(responseId, "response");
 	return joinPaths(getOpenAICodexImageDirectory(cwd), `${safeCallId}-${safeResponseId}.${ext}`);
@@ -334,7 +341,8 @@ export async function saveOpenAICodexGeneratedImage(
 	const workspaceRoot = await resolveWorkspaceRoot(cwd);
 	const fs = await getNodeFsPromises();
 	const bytes = Buffer.from(image.result, "base64");
-	const absolutePath = getOpenAICodexImagePath(workspaceRoot, image.responseId, image.callId, image.outputFormat);
+	const outputFormat = normalizeImageOutputFormat(image.outputFormat);
+	const absolutePath = getOpenAICodexImagePath(workspaceRoot, image.responseId, image.callId, outputFormat);
 	const latestAbsolutePath = getOpenAICodexLatestImagePath(workspaceRoot);
 	await fs.mkdir(dirnamePath(absolutePath), { recursive: true });
 	await fs.writeFile(absolutePath, bytes);
@@ -353,7 +361,7 @@ export async function saveOpenAICodexGeneratedImage(
 		latestRelativePath: latestRelativePathValue,
 		responseId: image.responseId,
 		callId: image.callId,
-		outputFormat: (image.outputFormat ?? "png").toLowerCase(),
+		outputFormat,
 		revisedPrompt: image.revisedPrompt,
 	};
 }
@@ -465,7 +473,9 @@ function buildWebSocketHeaders(
 
 function clampReasoningEffort(modelId: string, effort: string): string {
 	const id = modelId.includes("/") ? (modelId.split("/").pop() ?? modelId) : modelId;
-	if ((id.startsWith("gpt-5.2") || id.startsWith("gpt-5.3") || id.startsWith("gpt-5.4")) && effort === "minimal") return "low";
+	const gpt5MinorMatch = /^gpt-5\.(\d+)/.exec(id);
+	const gpt5Minor = gpt5MinorMatch ? Number.parseInt(gpt5MinorMatch[1], 10) : undefined;
+	if (gpt5Minor !== undefined && gpt5Minor >= 2 && effort === "minimal") return "low";
 	if (id === "gpt-5.1" && effort === "xhigh") return "high";
 	if (id === "gpt-5.1-codex-mini") return effort === "high" || effort === "xhigh" ? "high" : "medium";
 	return effort;
@@ -516,6 +526,10 @@ function buildRequestBody<TApi extends Api>(model: Model<TApi>, context: Context
 		tool_choice: "auto",
 		parallel_tool_calls: true,
 	};
+
+	if (options?.maxTokens !== undefined) {
+		body.max_output_tokens = options.maxTokens;
+	}
 
 	if ((options as { temperature?: number } | undefined)?.temperature !== undefined) {
 		body.temperature = (options as { temperature?: number }).temperature;
@@ -620,27 +634,9 @@ async function* parseSSE(response: Response): AsyncIterable<StreamEventShape> {
 	}
 }
 
-async function getWebSocketConstructor(): Promise<WebSocketConstructorLike | null> {
-	if (webSocketConstructorPromise) {
-		return webSocketConstructorPromise;
-	}
-
-	webSocketConstructorPromise = (async () => {
-		const globalCtor = (globalThis as typeof globalThis & { WebSocket?: WebSocketConstructorLike }).WebSocket;
-		if (typeof process === "undefined" || !(process.versions?.node || process.versions?.bun)) {
-			return typeof globalCtor === "function" ? globalCtor : null;
-		}
-
-		try {
-			const wsModule = (await dynamicImport("ws")) as { WebSocket?: WebSocketConstructorLike; default?: WebSocketConstructorLike };
-			const ctor = wsModule.WebSocket ?? wsModule.default;
-			return typeof ctor === "function" ? ctor : null;
-		} catch {
-			return typeof globalCtor === "function" ? globalCtor : null;
-		}
-	})();
-
-	return webSocketConstructorPromise;
+function getWebSocketConstructor(): WebSocketConstructorLike | null {
+	const ctor = (globalThis as typeof globalThis & { WebSocket?: WebSocketConstructorLike }).WebSocket;
+	return typeof ctor === "function" ? ctor : null;
 }
 
 function getWebSocketReadyState(socket: WebSocketLike): number | undefined {
@@ -693,20 +689,20 @@ function extractWebSocketCloseError(event: unknown): Error {
 }
 
 async function connectWebSocket(url: string, headers: Headers, signal: AbortSignal | undefined): Promise<WebSocketLike> {
-	const WebSocketCtor = await getWebSocketConstructor();
+	const WebSocketCtor = getWebSocketConstructor();
 	if (!WebSocketCtor) {
 		throw new Error("WebSocket transport is not available in this runtime");
 	}
 
 	const wsHeaders = headersToRecord(headers);
+	delete wsHeaders["OpenAI-Beta"];
 
 	return new Promise((resolve, reject) => {
 		let settled = false;
 		let socket: WebSocketLike;
-		const isNodeLike = typeof process !== "undefined" && !!(process.versions?.node || process.versions?.bun);
 
 		try {
-			socket = isNodeLike ? new WebSocketCtor(url, { headers: wsHeaders }) : new WebSocketCtor(url);
+			socket = new WebSocketCtor(url, { headers: wsHeaders });
 		} catch (error) {
 			reject(error instanceof Error ? error : new Error(String(error)));
 			return;
@@ -950,6 +946,7 @@ async function* parseWebSocket(socket: WebSocketLike, signal: AbortSignal | unde
 }
 
 async function* mapCodexEvents(events: AsyncIterable<StreamEventShape>): AsyncIterable<StreamEventShape> {
+	let sawTerminalResponse = false;
 	for await (const event of events) {
 		const type = typeof event.type === "string" ? event.type : undefined;
 		if (!type) continue;
@@ -963,6 +960,7 @@ async function* mapCodexEvents(events: AsyncIterable<StreamEventShape>): AsyncIt
 		}
 
 		if (type === "response.done" || type === "response.completed" || type === "response.incomplete") {
+			sawTerminalResponse = true;
 			const response = event.response;
 			yield {
 				...event,
@@ -973,6 +971,10 @@ async function* mapCodexEvents(events: AsyncIterable<StreamEventShape>): AsyncIt
 		}
 
 		yield event;
+	}
+
+	if (!sawTerminalResponse) {
+		throw new Error("Stream closed before response.completed");
 	}
 }
 
@@ -1022,17 +1024,18 @@ async function* captureGeneratedImages(
 			if (callId && result) {
 				try {
 					const outputFormat = typeof event.item.output_format === "string" ? event.item.output_format : undefined;
+					const normalizedOutputFormat = normalizeImageOutputFormat(outputFormat);
 					const saved = await saveOpenAICodexGeneratedImage(options.cwd, {
 						responseId,
 						callId,
 						result,
-						outputFormat,
+						outputFormat: normalizedOutputFormat,
 						revisedPrompt:
 							typeof event.item.revised_prompt === "string" ? event.item.revised_prompt : options.requestPrompt,
 					});
 					options.onImageSaved(saved, {
 						data: result,
-						mimeType: `image/${(outputFormat ?? "png").toLowerCase()}`,
+						mimeType: `image/${normalizedOutputFormat}`,
 					});
 				} catch (error) {
 					console.warn("[pi-codex-conversion] Failed to save generated image", error);
@@ -1058,14 +1061,14 @@ async function processCapturedResponsesStream<TApi extends Api>(
 	model: Model<TApi>,
 	options: SimpleStreamOptions | undefined,
 	deps: {
-		getCurrentCwd: () => string;
 		onImageSaved?: (savedImage: SavedGeneratedImage, imageData: { data: string; mimeType: string }) => void;
 		onWebSearchCaptured?: (search: SurfacedWebSearch) => void;
 	},
+	cwd: string,
 	requestPrompt: string | undefined,
 ): Promise<void> {
 	const tappedEvents = captureGeneratedImages(mapCodexEvents(events), {
-		cwd: deps.getCurrentCwd(),
+		cwd,
 		requestPrompt,
 		onImageSaved: (image, imageData) => deps.onImageSaved?.(image, imageData),
 		onWebSearchCaptured: (search) => deps.onWebSearchCaptured?.(search),
@@ -1088,10 +1091,10 @@ async function processWebSocketStream<TApi extends Api>(
 	onStart: () => void,
 	options: SimpleStreamOptions | undefined,
 	deps: {
-		getCurrentCwd: () => string;
 		onImageSaved?: (savedImage: SavedGeneratedImage, imageData: { data: string; mimeType: string }) => void;
 		onWebSearchCaptured?: (search: SurfacedWebSearch) => void;
 	},
+	cwd: string,
 	requestPrompt: string | undefined,
 ): Promise<void> {
 	const { socket, release } = await acquireWebSocket(url, headers, options?.sessionId, options?.signal);
@@ -1101,7 +1104,7 @@ async function processWebSocketStream<TApi extends Api>(
 		socket.send(JSON.stringify({ type: "response.create", ...body }));
 		onStart();
 		stream.push({ type: "start", partial: output });
-		await processCapturedResponsesStream(parseWebSocket(socket, options?.signal), output, stream, model, options, deps, requestPrompt);
+		await processCapturedResponsesStream(parseWebSocket(socket, options?.signal), output, stream, model, options, deps, cwd, requestPrompt);
 		if (options?.signal?.aborted) {
 			keepConnection = false;
 		}
@@ -1280,6 +1283,7 @@ function createCodexStream<TApi extends Api>(
 	},
 ): AssistantMessageEventStream {
 	const stream = createAssistantMessageEventStream();
+	const requestCwd = deps.getCurrentCwd();
 
 	(async () => {
 		const output = createInitialAssistantMessage(model);
@@ -1319,6 +1323,7 @@ function createCodexStream<TApi extends Api>(
 						},
 						options,
 						deps,
+						requestCwd,
 						requestPrompt,
 					);
 					if (options?.signal?.aborted) {
@@ -1368,8 +1373,11 @@ function createCodexStream<TApi extends Api>(
 						statusText: response.statusText,
 					});
 					const info = await parseErrorResponse(fakeResponse);
-					throw new Error(info.friendlyMessage || info.message);
+					throw new NonRetryableProviderError(info.friendlyMessage || info.message);
 				} catch (error) {
+					if (error instanceof NonRetryableProviderError) {
+						throw error;
+					}
 					if (error instanceof Error && (error.name === "AbortError" || error.message === "Request was aborted")) {
 						throw new Error("Request was aborted");
 					}
@@ -1392,7 +1400,7 @@ function createCodexStream<TApi extends Api>(
 			}
 
 			stream.push({ type: "start", partial: output });
-			await processCapturedResponsesStream(parseSSE(response), output, stream, model, options, deps, requestPrompt);
+			await processCapturedResponsesStream(parseSSE(response), output, stream, model, options, deps, requestCwd, requestPrompt);
 			finalizeUsage(model, output);
 
 			if (options?.signal?.aborted) {
