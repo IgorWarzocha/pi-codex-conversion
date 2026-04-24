@@ -848,6 +848,7 @@ async function* parseWebSocket(socket: WebSocketLike, signal: AbortSignal | unde
 	let pending: (() => void) | null = null;
 	let done = false;
 	let failed: Error | null = null;
+	let closeError: Error | null = null;
 	let sawCompletion = false;
 	let pendingMessages = 0;
 	let messageChain = Promise.resolve();
@@ -871,6 +872,7 @@ async function* parseWebSocket(socket: WebSocketLike, signal: AbortSignal | unde
 					const type = typeof parsed.type === "string" ? parsed.type : "";
 					if (type === "response.completed" || type === "response.done" || type === "response.incomplete") {
 						sawCompletion = true;
+						closeError = null;
 						done = true;
 					}
 					queue.push(parsed);
@@ -900,8 +902,8 @@ async function* parseWebSocket(socket: WebSocketLike, signal: AbortSignal | unde
 			wake();
 			return;
 		}
-		if (!failed) {
-			failed = extractWebSocketCloseError(event);
+		if (!closeError) {
+			closeError = extractWebSocketCloseError(event);
 		}
 		done = true;
 		wake();
@@ -934,6 +936,7 @@ async function* parseWebSocket(socket: WebSocketLike, signal: AbortSignal | unde
 		}
 
 		if (failed) throw failed;
+		if (closeError && !sawCompletion) throw closeError;
 		if (!sawCompletion) {
 			throw new Error("WebSocket stream closed before response.completed");
 		}
