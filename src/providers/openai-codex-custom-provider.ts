@@ -480,19 +480,19 @@ function clampReasoningEffort(modelId: string, effort: string): string {
 	return effort;
 }
 
-function getServiceTierCostMultiplier(serviceTier: ServiceTier): number {
+function getServiceTierCostMultiplier(model: Model<Api>, serviceTier: ServiceTier): number {
 	switch (serviceTier) {
 		case "flex":
 			return 0.5;
 		case "priority":
-			return 2;
+			return model.id === "gpt-5.5" ? 2.5 : 2;
 		default:
 			return 1;
 	}
 }
 
-function applyServiceTierPricing(usage: AssistantMessage["usage"], serviceTier: ServiceTier): void {
-	const multiplier = getServiceTierCostMultiplier(serviceTier);
+function applyServiceTierPricing(usage: AssistantMessage["usage"], serviceTier: ServiceTier, model: Model<Api>): void {
+	const multiplier = getServiceTierCostMultiplier(model, serviceTier);
 	if (multiplier === 1) return;
 	usage.cost.input *= multiplier;
 	usage.cost.output *= multiplier;
@@ -848,6 +848,7 @@ async function* parseWebSocket(socket: WebSocketLike, signal: AbortSignal | unde
 	let pending: (() => void) | null = null;
 	let done = false;
 	let failed: Error | null = null;
+	let closeError: Error | null = null;
 	let sawCompletion = false;
 	let pendingMessages = 0;
 	let messageChain = Promise.resolve();
@@ -871,6 +872,7 @@ async function* parseWebSocket(socket: WebSocketLike, signal: AbortSignal | unde
 					const type = typeof parsed.type === "string" ? parsed.type : "";
 					if (type === "response.completed" || type === "response.done" || type === "response.incomplete") {
 						sawCompletion = true;
+						closeError = null;
 						done = true;
 					}
 					queue.push(parsed);
@@ -900,8 +902,8 @@ async function* parseWebSocket(socket: WebSocketLike, signal: AbortSignal | unde
 			wake();
 			return;
 		}
-		if (!failed) {
-			failed = extractWebSocketCloseError(event);
+		if (!closeError) {
+			closeError = extractWebSocketCloseError(event);
 		}
 		done = true;
 		wake();
@@ -934,6 +936,7 @@ async function* parseWebSocket(socket: WebSocketLike, signal: AbortSignal | unde
 		}
 
 		if (failed) throw failed;
+		if (closeError && !sawCompletion) throw closeError;
 		if (!sawCompletion) {
 			throw new Error("WebSocket stream closed before response.completed");
 		}
@@ -1077,7 +1080,7 @@ async function processCapturedResponsesStream<TApi extends Api>(
 	await processResponsesStream(tappedEvents as AsyncIterable<never>, output, stream, model, {
 		serviceTier: (options as { serviceTier?: ServiceTier } | undefined)?.serviceTier,
 		resolveServiceTier: resolveCodexServiceTier,
-		applyServiceTierPricing,
+		applyServiceTierPricing: (usage, serviceTier) => applyServiceTierPricing(usage, serviceTier, model as Model<Api>),
 	});
 }
 
