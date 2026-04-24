@@ -8,12 +8,10 @@ type Message = Context["messages"][number];
 
 interface ImageGenerationCallItem {
 	type: "image_generation_call";
-	id?: string;
-	status?: string;
-	result?: string | null;
-	output_format?: string;
+	id: string;
+	status: string;
+	result: string | null;
 	revised_prompt?: string;
-	[key: string]: unknown;
 }
 
 interface ImageGenerationCallBlock {
@@ -74,6 +72,23 @@ function sanitizeSurrogates(text: string): string {
 
 function isImageGenerationCallBlock(block: InternalAssistantContent): block is ImageGenerationCallBlock {
 	return block.type === "image_generation_call" && block.item?.type === "image_generation_call";
+}
+
+function sanitizeImageGenerationCallItem(item: unknown): ImageGenerationCallItem | undefined {
+	if (!item || typeof item !== "object") return undefined;
+	const candidate = item as Record<string, unknown>;
+	if (candidate.type !== "image_generation_call") return undefined;
+	if (typeof candidate.id !== "string" || candidate.id === "") return undefined;
+	if (typeof candidate.status !== "string" || candidate.status === "") return undefined;
+	if (!(typeof candidate.result === "string" || candidate.result === null)) return undefined;
+
+	return {
+		type: "image_generation_call",
+		id: candidate.id,
+		status: candidate.status,
+		result: candidate.result,
+		...(typeof candidate.revised_prompt === "string" ? { revised_prompt: candidate.revised_prompt } : {}),
+	};
 }
 
 const NON_VISION_USER_IMAGE_PLACEHOLDER = "(image omitted: model does not support images)";
@@ -287,7 +302,8 @@ export function convertResponsesMessages<TApi extends Api>(
 			let assistantBlockIndex = 0;
 			for (const block of msg.content as InternalAssistantContent[]) {
 				if (isImageGenerationCallBlock(block)) {
-					output.push(block.item as ResponseInput[number]);
+					const imageGenerationCall = sanitizeImageGenerationCallItem(block.item);
+					if (imageGenerationCall) output.push(imageGenerationCall as ResponseInput[number]);
 				} else if (block.type === "thinking") {
 					if (block.thinkingSignature) output.push(JSON.parse(block.thinkingSignature));
 				} else if (block.type === "text") {
@@ -581,10 +597,13 @@ export async function processResponsesStream<TApi extends Api>(
 				stream.push({ type: "toolcall_end", contentIndex: toolCallIndex, toolCall, partial: output });
 				outputStates.delete(event.output_index);
 			} else if (item.type === "image_generation_call") {
-				(output.content as InternalAssistantContent[]).push({
-					type: "image_generation_call",
-					item: item as ImageGenerationCallItem,
-				});
+				const imageGenerationCall = sanitizeImageGenerationCallItem(item);
+				if (imageGenerationCall) {
+					(output.content as InternalAssistantContent[]).push({
+						type: "image_generation_call",
+						item: imageGenerationCall,
+					});
+				}
 				outputStates.delete(event.output_index);
 			}
 		} else if (event.type === "response.completed") {

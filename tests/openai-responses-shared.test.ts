@@ -139,12 +139,22 @@ test("processResponsesStream keeps interleaved message items separate by output 
 
 test("processResponsesStream preserves image generation calls for later Responses turns", async () => {
 	const output = createAssistantOutput();
+	const rawImageItem = {
+		type: "image_generation_call",
+		id: "ig_123",
+		status: "completed",
+		result: Buffer.from("png-bytes").toString("base64"),
+		action: "edit",
+		background: "opaque",
+		output_format: "png",
+		quality: "high",
+		revised_prompt: "A tiny red square icon",
+	};
 	const imageItem = {
 		type: "image_generation_call",
 		id: "ig_123",
 		status: "completed",
 		result: Buffer.from("png-bytes").toString("base64"),
-		output_format: "png",
 		revised_prompt: "A tiny red square icon",
 	};
 
@@ -159,7 +169,7 @@ test("processResponsesStream preserves image generation calls for later Response
 			{
 				type: "response.output_item.done",
 				output_index: 0,
-				item: imageItem,
+				item: rawImageItem,
 			},
 			{
 				type: "response.completed",
@@ -186,6 +196,46 @@ test("processResponsesStream preserves image generation calls for later Response
 	);
 
 	assert.deepEqual(messages, [imageItem]);
+});
+
+test("convertResponsesMessages strips unsupported image generation call fields from old history", () => {
+	const messages = convertResponsesMessages(
+		model,
+		{
+			messages: [
+				{
+					...createAssistantOutput(),
+					content: [
+						{
+							type: "image_generation_call",
+							item: {
+								type: "image_generation_call",
+								id: "ig_legacy",
+								status: "generating",
+								result: "base64-image",
+								revised_prompt: "diagram",
+								action: "edit",
+								background: "opaque",
+								output_format: "png",
+								quality: "high",
+							},
+						},
+					],
+				} as any,
+			],
+		},
+		new Set(["openai-codex"]),
+	);
+
+	assert.deepEqual(messages, [
+		{
+			type: "image_generation_call",
+			id: "ig_legacy",
+			status: "generating",
+			result: "base64-image",
+			revised_prompt: "diagram",
+		},
+	]);
 });
 
 test("processResponsesStream does not persist in-progress image generation calls", async () => {
