@@ -480,19 +480,19 @@ function clampReasoningEffort(modelId: string, effort: string): string {
 	return effort;
 }
 
-function getServiceTierCostMultiplier(serviceTier: ServiceTier): number {
+function getServiceTierCostMultiplier(model: Model<Api>, serviceTier: ServiceTier): number {
 	switch (serviceTier) {
 		case "flex":
 			return 0.5;
 		case "priority":
-			return 2;
+			return model.id === "gpt-5.5" ? 2.5 : 2;
 		default:
 			return 1;
 	}
 }
 
-function applyServiceTierPricing(usage: AssistantMessage["usage"], serviceTier: ServiceTier): void {
-	const multiplier = getServiceTierCostMultiplier(serviceTier);
+function applyServiceTierPricing(usage: AssistantMessage["usage"], serviceTier: ServiceTier, model: Model<Api>): void {
+	const multiplier = getServiceTierCostMultiplier(model, serviceTier);
 	if (multiplier === 1) return;
 	usage.cost.input *= multiplier;
 	usage.cost.output *= multiplier;
@@ -1077,7 +1077,7 @@ async function processCapturedResponsesStream<TApi extends Api>(
 	await processResponsesStream(tappedEvents as AsyncIterable<never>, output, stream, model, {
 		serviceTier: (options as { serviceTier?: ServiceTier } | undefined)?.serviceTier,
 		resolveServiceTier: resolveCodexServiceTier,
-		applyServiceTierPricing,
+		applyServiceTierPricing: (usage, serviceTier) => applyServiceTierPricing(usage, serviceTier, model as Model<Api>),
 	});
 }
 
