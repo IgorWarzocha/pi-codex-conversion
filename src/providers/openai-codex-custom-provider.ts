@@ -105,6 +105,12 @@ interface SessionWebSocketCacheEntry {
 	idleTimer?: ReturnType<typeof setTimeout>;
 }
 
+interface AcquiredWebSocket {
+	socket: WebSocketLike;
+	reused: boolean;
+	release: (options?: { keep?: boolean }) => void;
+}
+
 let fsPromisesPromise: Promise<typeof import("node:fs/promises")> | undefined;
 const workspaceRootCache = new Map<string, Promise<string>>();
 
@@ -753,12 +759,13 @@ async function acquireWebSocket(
 	headers: Headers,
 	sessionId: string | undefined,
 	signal: AbortSignal | undefined,
-): Promise<{ socket: WebSocketLike; release: (options?: { keep?: boolean }) => void }> {
+): Promise<AcquiredWebSocket> {
 	const cacheKey = buildWebSocketCacheKey(url, headers, sessionId);
 	if (!cacheKey) {
 		const socket = await connectWebSocket(url, headers, signal);
 		return {
 			socket,
+			reused: false,
 			release: ({ keep } = {}) => {
 				if (keep === false) {
 					closeWebSocketSilently(socket);
@@ -780,6 +787,7 @@ async function acquireWebSocket(
 			cached.busy = true;
 			return {
 				socket: cached.socket,
+				reused: true,
 				release: ({ keep } = {}) => {
 					if (!keep || !isWebSocketReusable(cached.socket)) {
 						closeWebSocketSilently(cached.socket);
@@ -796,6 +804,7 @@ async function acquireWebSocket(
 			const socket = await connectWebSocket(url, headers, signal);
 			return {
 				socket,
+				reused: false,
 				release: () => {
 					closeWebSocketSilently(socket);
 				},
@@ -813,6 +822,7 @@ async function acquireWebSocket(
 	websocketSessionCache.set(cacheKey, entry);
 	return {
 		socket,
+		reused: false,
 		release: ({ keep } = {}) => {
 			if (!keep || !isWebSocketReusable(entry.socket)) {
 				closeWebSocketSilently(entry.socket);
@@ -946,6 +956,21 @@ async function* parseWebSocket(socket: WebSocketLike, signal: AbortSignal | unde
 		socket.removeEventListener("close", onClose);
 		signal?.removeEventListener("abort", onAbort);
 	}
+}
+
+async function* countWebSocketEvents(
+	events: AsyncIterable<StreamEventShape>,
+	onEvent: () => void,
+): AsyncIterable<StreamEventShape> {
+	for await (const event of events) {
+		onEvent();
+		yield event;
+	}
+}
+
+function isRetryableEarlyWebSocketError(error: unknown): boolean {
+	const message = error instanceof Error ? error.message : String(error);
+	return /^WebSocket (error|closed)(?:\s|$)/.test(message);
 }
 
 async function* mapCodexEvents(events: AsyncIterable<StreamEventShape>): AsyncIterable<StreamEventShape> {
@@ -1100,22 +1125,58 @@ async function processWebSocketStream<TApi extends Api>(
 	cwd: string,
 	requestPrompt: string | undefined,
 ): Promise<void> {
-	const { socket, release } = await acquireWebSocket(url, headers, options?.sessionId, options?.signal);
-	let keepConnection = true;
+	let streamStarted = false;
 
-	try {
-		socket.send(JSON.stringify({ type: "response.create", ...body }));
-		onStart();
-		stream.push({ type: "start", partial: output });
-		await processCapturedResponsesStream(parseWebSocket(socket, options?.signal), output, stream, model, options, deps, cwd, requestPrompt);
-		if (options?.signal?.aborted) {
+	for (let attempt = 0; attempt < 2; attempt++) {
+		const { socket, release, reused } = await acquireWebSocket(url, headers, options?.sessionId, options?.signal);
+		let keepConnection = true;
+		let released = false;
+		let eventCount = 0;
+
+		const releaseOnce = (releaseOptions?: { keep?: boolean }) => {
+			if (released) return;
+			released = true;
+			release(releaseOptions);
+		};
+
+		try {
+			socket.send(JSON.stringify({ type: "response.create", ...body }));
+			if (!streamStarted) {
+				onStart();
+				stream.push({ type: "start", partial: output });
+				streamStarted = true;
+			}
+			await processCapturedResponsesStream(
+				countWebSocketEvents(parseWebSocket(socket, options?.signal), () => {
+					eventCount++;
+				}),
+				output,
+				stream,
+				model,
+				options,
+				deps,
+				cwd,
+				requestPrompt,
+			);
+			if (options?.signal?.aborted) {
+				keepConnection = false;
+			}
+			releaseOnce({ keep: keepConnection });
+			return;
+		} catch (error) {
 			keepConnection = false;
+			releaseOnce({ keep: false });
+			// Pi's stock provider reuses session WebSockets. In practice the Codex
+			// backend sometimes cleanly closes an idle cached socket between turns;
+			// if that stale socket fails before any response event, retry once on a
+			// fresh WebSocket without changing request shape or falling back transports.
+			if (attempt === 0 && reused && eventCount === 0 && !options?.signal?.aborted && isRetryableEarlyWebSocketError(error)) {
+				continue;
+			}
+			throw error;
+		} finally {
+			releaseOnce({ keep: keepConnection });
 		}
-	} catch (error) {
-		keepConnection = false;
-		throw error;
-	} finally {
-		release({ keep: keepConnection });
 	}
 }
 
