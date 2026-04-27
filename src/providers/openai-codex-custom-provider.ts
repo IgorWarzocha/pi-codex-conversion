@@ -1303,7 +1303,15 @@ function createErrorMessage(message: AssistantMessage, error: unknown, aborted: 
 		}
 	}
 	message.stopReason = aborted ? "aborted" : "error";
-	message.errorMessage = error instanceof Error ? error.message : String(error);
+	message.errorMessage = buildProviderErrorMessage(error);
+	return message;
+}
+
+export function buildProviderErrorMessage(error: unknown): string {
+	const message = error instanceof Error ? error.message : String(error);
+	if (/^(?:WebSocket (?:error|closed)|WebSocket stream closed before response\.completed|Stream closed before response\.completed)/.test(message)) {
+		return `Connection error: ${message}`;
+	}
 	return message;
 }
 

@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
+	buildProviderErrorMessage,
 	buildGeneratedImageDisplayText,
 	buildWebSearchActivityMessage,
 	buildWebSearchSummaryText,
@@ -11,6 +12,16 @@ import {
 	getOpenAICodexImagePath,
 	saveOpenAICodexGeneratedImage,
 } from "../src/providers/openai-codex-custom-provider.ts";
+
+test("buildProviderErrorMessage marks websocket failures as Pi retryable connection errors", () => {
+	assert.equal(buildProviderErrorMessage(new Error("WebSocket error")), "Connection error: WebSocket error");
+	assert.equal(buildProviderErrorMessage(new Error("WebSocket closed 1000")), "Connection error: WebSocket closed 1000");
+	assert.equal(
+		buildProviderErrorMessage(new Error("WebSocket stream closed before response.completed")),
+		"Connection error: WebSocket stream closed before response.completed",
+	);
+	assert.equal(buildProviderErrorMessage(new Error("Unsupported parameter: max_output_tokens")), "Unsupported parameter: max_output_tokens");
+});
 
 test("getOpenAICodexImagePath saves images under the repo-local .pi/openai-codex-images directory", () => {
 	const filePath = getOpenAICodexImagePath("/repo", "resp_123", "ig_456", "png");
