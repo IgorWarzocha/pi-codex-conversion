@@ -525,7 +525,7 @@ function buildRequestBody<TApi extends Api>(model: Model<TApi>, context: Context
 		stream: true,
 		instructions: context.systemPrompt,
 		input: messages,
-		text: { verbosity: ((options as { textVerbosity?: string } | undefined)?.textVerbosity ?? "medium") as string },
+		text: { verbosity: ((options as { textVerbosity?: string } | undefined)?.textVerbosity ?? "low") as string },
 		include: ["reasoning.encrypted_content"],
 		prompt_cache_key: options?.sessionId,
 		tool_choice: "auto",
@@ -546,7 +546,7 @@ function buildRequestBody<TApi extends Api>(model: Model<TApi>, context: Context
 		body.service_tier = serviceTier;
 	}
 
-	if (context.tools) {
+	if (context.tools && context.tools.length > 0) {
 		body.tools = convertResponsesTools(context.tools, { strict: null });
 		const hasWebSearchTool = context.tools.some((tool) => tool.name === "web_search");
 		if (hasWebSearchTool) {
