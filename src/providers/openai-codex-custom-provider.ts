@@ -103,12 +103,20 @@ interface SessionWebSocketCacheEntry {
 	socket: WebSocketLike;
 	busy: boolean;
 	idleTimer?: ReturnType<typeof setTimeout>;
+	continuation?: CachedWebSocketContinuationState;
 }
 
 interface AcquiredWebSocket {
 	socket: WebSocketLike;
+	entry?: SessionWebSocketCacheEntry;
 	reused: boolean;
 	release: (options?: { keep?: boolean }) => void;
+}
+
+interface CachedWebSocketContinuationState {
+	lastRequestBody: ResponsesBody;
+	lastResponseId: string;
+	lastResponseItems: unknown[];
 }
 
 let fsPromisesPromise: Promise<typeof import("node:fs/promises")> | undefined;
@@ -121,7 +129,8 @@ interface ResponsesBody {
 	store: boolean;
 	stream: boolean;
 	instructions?: string;
-	input: unknown;
+	previous_response_id?: string;
+	input: unknown[];
 	text: { verbosity: string };
 	include: string[];
 	prompt_cache_key?: string;
@@ -790,6 +799,7 @@ async function acquireWebSocket(
 			cached.busy = true;
 			return {
 				socket: cached.socket,
+				entry: cached,
 				reused: true,
 				release: ({ keep } = {}) => {
 					if (!keep || !isWebSocketReusable(cached.socket)) {
@@ -825,6 +835,7 @@ async function acquireWebSocket(
 	websocketSessionCache.set(cacheKey, entry);
 	return {
 		socket,
+		entry,
 		reused: false,
 		release: ({ keep } = {}) => {
 			if (!keep || !isWebSocketReusable(entry.socket)) {
@@ -854,6 +865,57 @@ async function decodeWebSocketData(data: unknown): Promise<string | null> {
 		return new TextDecoder().decode(new Uint8Array(arrayBuffer));
 	}
 	return null;
+}
+
+function requestBodyWithoutInput(body: ResponsesBody): ResponsesBody {
+	const { input: _input, previous_response_id: _previousResponseId, ...rest } = body;
+	return rest as ResponsesBody;
+}
+
+function responseInputsEqual(a: unknown[] | undefined, b: unknown[] | undefined): boolean {
+	return JSON.stringify(a ?? []) === JSON.stringify(b ?? []);
+}
+
+function requestBodiesMatchExceptInput(a: ResponsesBody, b: ResponsesBody): boolean {
+	return JSON.stringify(requestBodyWithoutInput(a)) === JSON.stringify(requestBodyWithoutInput(b));
+}
+
+function getCachedWebSocketInputDelta(body: ResponsesBody, continuation: CachedWebSocketContinuationState): unknown[] | undefined {
+	if (!requestBodiesMatchExceptInput(body, continuation.lastRequestBody)) {
+		return undefined;
+	}
+
+	const currentInput = body.input ?? [];
+	const baseline = [...(continuation.lastRequestBody.input ?? []), ...continuation.lastResponseItems];
+	if (currentInput.length < baseline.length) {
+		return undefined;
+	}
+
+	const prefix = currentInput.slice(0, baseline.length);
+	if (!responseInputsEqual(prefix, baseline)) {
+		return undefined;
+	}
+
+	return currentInput.slice(baseline.length);
+}
+
+function buildCachedWebSocketRequestBody(entry: SessionWebSocketCacheEntry, body: ResponsesBody): ResponsesBody {
+	const continuation = entry.continuation;
+	if (!continuation) {
+		return body;
+	}
+
+	const delta = getCachedWebSocketInputDelta(body, continuation);
+	if (!delta || !continuation.lastResponseId) {
+		entry.continuation = undefined;
+		return body;
+	}
+
+	return {
+		...body,
+		previous_response_id: continuation.lastResponseId,
+		input: delta,
+	};
 }
 
 async function* parseWebSocket(socket: WebSocketLike, signal: AbortSignal | undefined): AsyncIterable<StreamEventShape> {
@@ -1131,10 +1193,15 @@ async function processWebSocketStream<TApi extends Api>(
 	let streamStarted = false;
 
 	for (let attempt = 0; attempt < 2; attempt++) {
-		const { socket, release, reused } = await acquireWebSocket(url, headers, options?.sessionId, options?.signal);
+		const { socket, entry, release, reused } = await acquireWebSocket(url, headers, options?.sessionId, options?.signal);
 		let keepConnection = true;
 		let released = false;
 		let eventCount = 0;
+		const useCachedContext = (options as { transport?: string } | undefined)?.transport === "websocket-cached";
+		// ChatGPT Codex Responses rejects `store: true` ("Store must be set to false").
+		// WebSocket continuation still works via connection-scoped previous_response_id state.
+		const fullBody = body;
+		const requestBody = useCachedContext && entry ? buildCachedWebSocketRequestBody(entry, fullBody) : fullBody;
 
 		const releaseOnce = (releaseOptions?: { keep?: boolean }) => {
 			if (released) return;
@@ -1143,7 +1210,7 @@ async function processWebSocketStream<TApi extends Api>(
 		};
 
 		try {
-			socket.send(JSON.stringify({ type: "response.create", ...body }));
+			socket.send(JSON.stringify({ type: "response.create", ...requestBody }));
 			if (!streamStarted) {
 				onStart();
 				stream.push({ type: "start", partial: output });
@@ -1163,10 +1230,22 @@ async function processWebSocketStream<TApi extends Api>(
 			);
 			if (options?.signal?.aborted) {
 				keepConnection = false;
+			} else if (useCachedContext && entry && output.responseId) {
+				const responseItems = convertResponsesMessages(model, { messages: [output] }, CODEX_TOOL_CALL_PROVIDERS, {
+					includeSystemPrompt: false,
+				}).filter((item) => typeof item === "object" && item !== null && (item as { type?: unknown }).type !== "function_call_output");
+				entry.continuation = {
+					lastRequestBody: fullBody,
+					lastResponseId: output.responseId,
+					lastResponseItems: responseItems,
+				};
 			}
 			releaseOnce({ keep: keepConnection });
 			return;
 		} catch (error) {
+			if (entry) {
+				entry.continuation = undefined;
+			}
 			keepConnection = false;
 			releaseOnce({ keep: false });
 			// Pi's stock provider reuses session WebSockets. In practice the Codex
@@ -1409,7 +1488,7 @@ function createCodexStream<TApi extends Api>(
 					stream.end();
 					return;
 				} catch (error) {
-					if (transport === "websocket" || websocketStarted) {
+					if (transport === "websocket" || transport === "websocket-cached" || websocketStarted) {
 						throw error;
 					}
 				}
