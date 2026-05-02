@@ -3,7 +3,6 @@ import { Box, Image, Spacer, Text } from "@mariozechner/pi-tui";
 import {
 	createAssistantMessageEventStream,
 	getEnvApiKey,
-	supportsXhigh,
 	type Api,
 	type AssistantMessage,
 	type AssistantMessageEventStream,
@@ -514,6 +513,20 @@ function resolveCodexServiceTier(responseServiceTier: ServiceTier, requestServic
 	return responseServiceTier ?? requestServiceTier;
 }
 
+function modelSupportsXhigh<TApi extends Api>(model: Model<TApi>): boolean {
+	return (
+		model.id.includes("gpt-5.2") ||
+		model.id.includes("gpt-5.3") ||
+		model.id.includes("gpt-5.4") ||
+		model.id.includes("gpt-5.5") ||
+		model.id.includes("deepseek-v4-pro") ||
+		model.id.includes("opus-4-6") ||
+		model.id.includes("opus-4.6") ||
+		model.id.includes("opus-4-7") ||
+		model.id.includes("opus-4.7")
+	);
+}
+
 function buildRequestBody<TApi extends Api>(model: Model<TApi>, context: Context, options?: SimpleStreamOptions): ResponsesBody {
 	const messages = convertResponsesMessages(model, context, CODEX_TOOL_CALL_PROVIDERS, {
 		includeSystemPrompt: false,
@@ -555,7 +568,7 @@ function buildRequestBody<TApi extends Api>(model: Model<TApi>, context: Context
 	}
 
 	if (options?.reasoning !== undefined) {
-		const requested = supportsXhigh(model) ? options.reasoning : options.reasoning === "xhigh" ? "high" : options.reasoning;
+		const requested = modelSupportsXhigh(model) ? options.reasoning : options.reasoning === "xhigh" ? "high" : options.reasoning;
 		body.reasoning = {
 			effort: clampReasoningEffort(model.id, requested),
 			summary: ((options as { reasoningSummary?: string } | undefined)?.reasoningSummary ?? "auto") as string,
