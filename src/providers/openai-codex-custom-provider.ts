@@ -2,7 +2,9 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Box, Image, Spacer, Text } from "@mariozechner/pi-tui";
 import {
 	createAssistantMessageEventStream,
+	appendAssistantMessageDiagnostic,
 	clampThinkingLevel,
+	createAssistantMessageDiagnostic,
 	getEnvApiKey,
 	type Api,
 	type AssistantMessage,
@@ -412,16 +414,6 @@ function headersToRecord(headers: Headers): Record<string, string> {
 	return Object.fromEntries(headers.entries());
 }
 
-function buildWebSocketCacheKey(url: string, headers: Headers, sessionId: string | undefined): string | undefined {
-	if (!sessionId) return undefined;
-	const headerFingerprint = Object.entries(headersToRecord(headers))
-		.map(([key, value]) => [key.toLowerCase(), value] as const)
-		.sort(([a], [b]) => a.localeCompare(b))
-		.map(([key, value]) => `${key}:${value}`)
-		.join("\n");
-	return `${sessionId}:${shortHash(`${url}\n${headerFingerprint}`)}`;
-}
-
 function createCodexRequestId(): string {
 	if (typeof globalThis.crypto?.randomUUID === "function") {
 		return globalThis.crypto.randomUUID();
@@ -674,6 +666,7 @@ function closeWebSocketSilently(socket: WebSocketLike, code = 1000, reason = "do
 	}
 }
 
+
 function scheduleSessionWebSocketExpiry(cacheKey: string, entry: SessionWebSocketCacheEntry): void {
 	if (entry.idleTimer) {
 		clearTimeout(entry.idleTimer);
@@ -772,8 +765,7 @@ async function acquireWebSocket(
 	sessionId: string | undefined,
 	signal: AbortSignal | undefined,
 ): Promise<AcquiredWebSocket> {
-	const cacheKey = buildWebSocketCacheKey(url, headers, sessionId);
-	if (!cacheKey) {
+	if (!sessionId) {
 		const socket = await connectWebSocket(url, headers, signal);
 		return {
 			socket,
@@ -788,7 +780,7 @@ async function acquireWebSocket(
 		};
 	}
 
-	const cached = websocketSessionCache.get(cacheKey);
+	const cached = websocketSessionCache.get(sessionId);
 	if (cached) {
 		if (cached.idleTimer) {
 			clearTimeout(cached.idleTimer);
@@ -804,11 +796,11 @@ async function acquireWebSocket(
 				release: ({ keep } = {}) => {
 					if (!keep || !isWebSocketReusable(cached.socket)) {
 						closeWebSocketSilently(cached.socket);
-						websocketSessionCache.delete(cacheKey);
+						websocketSessionCache.delete(sessionId);
 						return;
 					}
 					cached.busy = false;
-					scheduleSessionWebSocketExpiry(cacheKey, cached);
+					scheduleSessionWebSocketExpiry(sessionId, cached);
 				},
 			};
 		}
@@ -826,13 +818,13 @@ async function acquireWebSocket(
 
 		if (!isWebSocketReusable(cached.socket)) {
 			closeWebSocketSilently(cached.socket);
-			websocketSessionCache.delete(cacheKey);
+			websocketSessionCache.delete(sessionId);
 		}
 	}
 
 	const socket = await connectWebSocket(url, headers, signal);
 	const entry: SessionWebSocketCacheEntry = { socket, busy: true };
-	websocketSessionCache.set(cacheKey, entry);
+	websocketSessionCache.set(sessionId, entry);
 	return {
 		socket,
 		entry,
@@ -841,13 +833,13 @@ async function acquireWebSocket(
 			if (!keep || !isWebSocketReusable(entry.socket)) {
 				closeWebSocketSilently(entry.socket);
 				if (entry.idleTimer) clearTimeout(entry.idleTimer);
-				if (websocketSessionCache.get(cacheKey) === entry) {
-					websocketSessionCache.delete(cacheKey);
+				if (websocketSessionCache.get(sessionId) === entry) {
+					websocketSessionCache.delete(sessionId);
 				}
 				return;
 			}
 			entry.busy = false;
-			scheduleSessionWebSocketExpiry(cacheKey, entry);
+			scheduleSessionWebSocketExpiry(sessionId, entry);
 		},
 	};
 }
@@ -1197,7 +1189,8 @@ async function processWebSocketStream<TApi extends Api>(
 		let keepConnection = true;
 		let released = false;
 		let eventCount = 0;
-		const useCachedContext = (options as { transport?: string } | undefined)?.transport === "websocket-cached";
+		const transport = (options as { transport?: string } | undefined)?.transport ?? "auto";
+		const useCachedContext = transport === "websocket-cached" || transport === "auto";
 		// ChatGPT Codex Responses rejects `store: true` ("Store must be set to false").
 		// WebSocket continuation still works via connection-scoped previous_response_id state.
 		const fullBody = body;
@@ -1460,7 +1453,7 @@ function createCodexStream<TApi extends Api>(
 			const sseHeaders = buildSSEHeaders(model.headers, options?.headers, accountId, apiKey, options?.sessionId);
 			const websocketHeaders = buildWebSocketHeaders(model.headers, options?.headers, accountId, apiKey, websocketRequestId);
 			const bodyJson = JSON.stringify(body);
-			const transport = options?.transport || "sse";
+			const transport = options?.transport || "auto";
 
 			if (transport !== "sse") {
 				let websocketStarted = false;
@@ -1488,6 +1481,16 @@ function createCodexStream<TApi extends Api>(
 					stream.end();
 					return;
 				} catch (error) {
+					appendAssistantMessageDiagnostic(
+						output,
+						createAssistantMessageDiagnostic("provider_transport_failure", error, {
+							configuredTransport: transport,
+							fallbackTransport: websocketStarted ? undefined : "sse",
+							eventsEmitted: websocketStarted,
+							phase: websocketStarted ? "after_message_stream_start" : "before_message_stream_start",
+							requestBytes: new TextEncoder().encode(bodyJson).byteLength,
+						}),
+					);
 					if (transport === "websocket" || transport === "websocket-cached" || websocketStarted) {
 						throw error;
 					}
