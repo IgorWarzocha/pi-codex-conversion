@@ -24,11 +24,8 @@ import { buildCodexSystemPrompt, extractPiPromptSkills, type PromptSkill } from 
 import { registerViewImageTool, supportsOriginalImageDetail } from "./tools/view-image-tool.ts";
 import {
 	registerWebSearchTool,
-	registerWebSearchSessionNoteRenderer,
 	rewriteNativeWebSearchTool,
-	shouldShowWebSearchSessionNote,
 	supportsNativeWebSearch,
-	WEB_SEARCH_SESSION_NOTE_TEXT,
 	WEB_SEARCH_SESSION_NOTE_TYPE,
 } from "./tools/web-search-tool.ts";
 import { registerWriteStdinTool } from "./tools/write-stdin-tool.ts";
@@ -38,7 +35,6 @@ interface AdapterState {
 	cwd: string;
 	previousToolNames?: string[];
 	promptSkills: PromptSkill[];
-	webSearchNoticeShown: boolean;
 }
 
 const ADAPTER_TOOL_NAMES = [...CORE_ADAPTER_TOOL_NAMES, WEB_SEARCH_TOOL_NAME, IMAGE_GENERATION_TOOL_NAME, VIEW_IMAGE_TOOL_NAME];
@@ -62,7 +58,7 @@ function isToolCallOnlyAssistantMessage(message: unknown): boolean {
 
 export default function codexConversion(pi: ExtensionAPI) {
 	const tracker = createExecCommandTracker();
-	const state: AdapterState = { enabled: false, cwd: process.cwd(), promptSkills: [], webSearchNoticeShown: false };
+	const state: AdapterState = { enabled: false, cwd: process.cwd(), promptSkills: [] };
 	const sessions = createExecSessionManager();
 
 	registerOpenAICodexCustomProvider(pi, {
@@ -73,7 +69,6 @@ export default function codexConversion(pi: ExtensionAPI) {
 	registerWriteStdinTool(pi, sessions);
 	registerImageGenerationTool(pi);
 	registerWebSearchTool(pi);
-	registerWebSearchSessionNoteRenderer(pi);
 
 	sessions.onSessionExit((sessionId) => {
 		tracker.recordSessionFinished(sessionId);
@@ -81,7 +76,6 @@ export default function codexConversion(pi: ExtensionAPI) {
 
 	pi.on("session_start", async (_event, ctx) => {
 		state.cwd = ctx.cwd;
-		state.webSearchNoticeShown = false;
 		clearApplyPatchRenderState();
 		tracker.clear();
 		syncAdapter(pi, ctx, state);
@@ -157,7 +151,6 @@ function syncAdapter(pi: ExtensionAPI, ctx: ExtensionContext, state: AdapterStat
 	state.promptSkills = extractPiPromptSkills(ctx.getSystemPrompt());
 
 	registerViewImageTool(pi, { allowOriginalDetail: supportsOriginalImageDetail(ctx.model) });
-	maybeShowWebSearchSessionNote(pi, ctx, state);
 
 	if (isCodexLikeContext(ctx)) {
 		enableAdapter(pi, ctx, state);
@@ -226,16 +219,4 @@ export function restoreTools(previousTools: string[], activeTools: string[]): st
 
 function hasAdapterTools(activeTools: string[]): boolean {
 	return activeTools.some((toolName) => ADAPTER_TOOL_NAMES.includes(toolName));
-}
-
-function maybeShowWebSearchSessionNote(pi: ExtensionAPI, ctx: ExtensionContext, state: AdapterState): void {
-	if (!shouldShowWebSearchSessionNote(ctx.model, ctx.hasUI, state.webSearchNoticeShown)) {
-		return;
-	}
-	pi.sendMessage({
-		customType: WEB_SEARCH_SESSION_NOTE_TYPE,
-		content: WEB_SEARCH_SESSION_NOTE_TEXT,
-		display: true,
-	});
-	state.webSearchNoticeShown = true;
 }
