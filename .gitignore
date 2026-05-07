@@ -1,3 +1,5 @@
 node_modules
 .DS_Store
+.pi/semantic-grep.sqlite
+.pi/semantic-grep.sqlite-*
 .pi/openai-codex-images/

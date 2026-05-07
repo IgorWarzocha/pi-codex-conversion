@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createExecSessionManager } from "../src/tools/exec-session-manager.ts";
 import { formatUnifiedExecResult } from "../src/tools/unified-exec-format.ts";
 import { registerWriteStdinTool } from "../src/tools/write-stdin-tool.ts";

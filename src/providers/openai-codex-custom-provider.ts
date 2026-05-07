@@ -1,8 +1,10 @@
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { Box, Image, Spacer, Text } from "@mariozechner/pi-tui";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Box, Image, Spacer, Text } from "@earendil-works/pi-tui";
 import {
 	createAssistantMessageEventStream,
+	appendAssistantMessageDiagnostic,
 	clampThinkingLevel,
+	createAssistantMessageDiagnostic,
 	getEnvApiKey,
 	type Api,
 	type AssistantMessage,
@@ -10,7 +12,7 @@ import {
 	type Context,
 	type Model,
 	type SimpleStreamOptions,
-} from "@mariozechner/pi-ai";
+} from "@earendil-works/pi-ai";
 import type { ResponseCreateParamsStreaming } from "openai/resources/responses/responses.js";
 import {
 	convertResponsesMessages,
@@ -29,6 +31,7 @@ const BASE_DELAY_MS = 1000;
 const CODEX_TOOL_CALL_PROVIDERS = new Set(["openai", "openai-codex", "opencode"]);
 const CODEX_RESPONSE_STATUSES = new Set(["completed", "incomplete", "failed", "cancelled", "queued", "in_progress"]);
 const OPENAI_BETA_RESPONSES_WEBSOCKETS = "responses_websockets=2026-02-06";
+const WEBSOCKET_MESSAGE_TOO_BIG_CLOSE_CODE = 1009;
 const SESSION_WEBSOCKET_CACHE_TTL_MS = 5 * 60 * 1000;
 const dynamicImport = (specifier: string) => import(specifier);
 let _os: { platform(): string; release(): string; arch(): string } | null = null;
@@ -412,16 +415,6 @@ function headersToRecord(headers: Headers): Record<string, string> {
 	return Object.fromEntries(headers.entries());
 }
 
-function buildWebSocketCacheKey(url: string, headers: Headers, sessionId: string | undefined): string | undefined {
-	if (!sessionId) return undefined;
-	const headerFingerprint = Object.entries(headersToRecord(headers))
-		.map(([key, value]) => [key.toLowerCase(), value] as const)
-		.sort(([a], [b]) => a.localeCompare(b))
-		.map(([key, value]) => `${key}:${value}`)
-		.join("\n");
-	return `${sessionId}:${shortHash(`${url}\n${headerFingerprint}`)}`;
-}
-
 function createCodexRequestId(): string {
 	if (typeof globalThis.crypto?.randomUUID === "function") {
 		return globalThis.crypto.randomUUID();
@@ -523,7 +516,7 @@ function resolveCodexServiceTier(responseServiceTier: ServiceTier, requestServic
 	return responseServiceTier ?? requestServiceTier;
 }
 
-function buildRequestBody<TApi extends Api>(model: Model<TApi>, context: Context, options?: SimpleStreamOptions): ResponsesBody {
+export function buildRequestBody<TApi extends Api>(model: Model<TApi>, context: Context, options?: SimpleStreamOptions): ResponsesBody {
 	const messages = convertResponsesMessages(model, context, CODEX_TOOL_CALL_PROVIDERS, {
 		includeSystemPrompt: false,
 	});
@@ -532,7 +525,7 @@ function buildRequestBody<TApi extends Api>(model: Model<TApi>, context: Context
 		model: model.id,
 		store: false,
 		stream: true,
-		instructions: context.systemPrompt,
+		instructions: context.systemPrompt || "You are a helpful assistant.",
 		input: messages,
 		text: { verbosity: ((options as { textVerbosity?: string } | undefined)?.textVerbosity ?? "low") as string },
 		include: ["reasoning.encrypted_content"],
@@ -603,7 +596,7 @@ function sleep(ms: number, signal: AbortSignal | undefined): Promise<void> {
 	});
 }
 
-async function* parseSSE(response: Response): AsyncIterable<StreamEventShape> {
+export async function* parseSSE(response: Response): AsyncIterable<StreamEventShape> {
 	if (!response.body) return;
 
 	const reader = response.body.getReader();
@@ -630,8 +623,8 @@ async function* parseSSE(response: Response): AsyncIterable<StreamEventShape> {
 					if (data && data !== "[DONE]") {
 						try {
 							yield JSON.parse(data) as StreamEventShape;
-						} catch {
-							// Ignore malformed SSE chunks and continue consuming the stream.
+						} catch (error) {
+							throw new Error(`Invalid Codex SSE JSON: ${error instanceof Error ? error.message : String(error)}`);
 						}
 					}
 				}
@@ -674,6 +667,29 @@ function closeWebSocketSilently(socket: WebSocketLike, code = 1000, reason = "do
 	}
 }
 
+export function closeOpenAICodexWebSocketSessions(sessionId?: string): void {
+	const closeEntry = (entry: SessionWebSocketCacheEntry) => {
+		if (entry.idleTimer) {
+			clearTimeout(entry.idleTimer);
+			entry.idleTimer = undefined;
+		}
+		closeWebSocketSilently(entry.socket, 1000, "session_shutdown");
+	};
+
+	if (sessionId) {
+		const entry = websocketSessionCache.get(sessionId);
+		if (entry) closeEntry(entry);
+		websocketSessionCache.delete(sessionId);
+		return;
+	}
+
+	for (const entry of websocketSessionCache.values()) {
+		closeEntry(entry);
+	}
+	websocketSessionCache.clear();
+}
+
+
 function scheduleSessionWebSocketExpiry(cacheKey: string, entry: SessionWebSocketCacheEntry): void {
 	if (entry.idleTimer) {
 		clearTimeout(entry.idleTimer);
@@ -700,7 +716,10 @@ function extractWebSocketCloseError(event: unknown): Error {
 		const code = "code" in event ? (event as { code?: unknown }).code : undefined;
 		const reason = "reason" in event ? (event as { reason?: unknown }).reason : undefined;
 		const codeText = typeof code === "number" ? ` ${code}` : "";
-		const reasonText = typeof reason === "string" && reason.length > 0 ? ` ${reason}` : "";
+		let reasonText = typeof reason === "string" && reason.length > 0 ? ` ${reason}` : "";
+		if (!reasonText && code === WEBSOCKET_MESSAGE_TOO_BIG_CLOSE_CODE) {
+			reasonText = " message too big";
+		}
 		return new Error(`WebSocket closed${codeText}${reasonText}`.trim());
 	}
 	return new Error("WebSocket closed");
@@ -772,8 +791,7 @@ async function acquireWebSocket(
 	sessionId: string | undefined,
 	signal: AbortSignal | undefined,
 ): Promise<AcquiredWebSocket> {
-	const cacheKey = buildWebSocketCacheKey(url, headers, sessionId);
-	if (!cacheKey) {
+	if (!sessionId) {
 		const socket = await connectWebSocket(url, headers, signal);
 		return {
 			socket,
@@ -788,7 +806,7 @@ async function acquireWebSocket(
 		};
 	}
 
-	const cached = websocketSessionCache.get(cacheKey);
+	const cached = websocketSessionCache.get(sessionId);
 	if (cached) {
 		if (cached.idleTimer) {
 			clearTimeout(cached.idleTimer);
@@ -804,11 +822,11 @@ async function acquireWebSocket(
 				release: ({ keep } = {}) => {
 					if (!keep || !isWebSocketReusable(cached.socket)) {
 						closeWebSocketSilently(cached.socket);
-						websocketSessionCache.delete(cacheKey);
+						websocketSessionCache.delete(sessionId);
 						return;
 					}
 					cached.busy = false;
-					scheduleSessionWebSocketExpiry(cacheKey, cached);
+					scheduleSessionWebSocketExpiry(sessionId, cached);
 				},
 			};
 		}
@@ -826,13 +844,13 @@ async function acquireWebSocket(
 
 		if (!isWebSocketReusable(cached.socket)) {
 			closeWebSocketSilently(cached.socket);
-			websocketSessionCache.delete(cacheKey);
+			websocketSessionCache.delete(sessionId);
 		}
 	}
 
 	const socket = await connectWebSocket(url, headers, signal);
 	const entry: SessionWebSocketCacheEntry = { socket, busy: true };
-	websocketSessionCache.set(cacheKey, entry);
+	websocketSessionCache.set(sessionId, entry);
 	return {
 		socket,
 		entry,
@@ -841,13 +859,13 @@ async function acquireWebSocket(
 			if (!keep || !isWebSocketReusable(entry.socket)) {
 				closeWebSocketSilently(entry.socket);
 				if (entry.idleTimer) clearTimeout(entry.idleTimer);
-				if (websocketSessionCache.get(cacheKey) === entry) {
-					websocketSessionCache.delete(cacheKey);
+				if (websocketSessionCache.get(sessionId) === entry) {
+					websocketSessionCache.delete(sessionId);
 				}
 				return;
 			}
 			entry.busy = false;
-			scheduleSessionWebSocketExpiry(cacheKey, entry);
+			scheduleSessionWebSocketExpiry(sessionId, entry);
 		},
 	};
 }
@@ -951,8 +969,9 @@ async function* parseWebSocket(socket: WebSocketLike, signal: AbortSignal | unde
 						done = true;
 					}
 					queue.push(parsed);
-				} catch {
-					// ignore malformed websocket messages
+				} catch (error) {
+					failed = new Error(`Invalid Codex WebSocket JSON: ${error instanceof Error ? error.message : String(error)}`);
+					done = true;
 				}
 			})
 			.catch((error: unknown) => {
@@ -1033,9 +1052,27 @@ async function* countWebSocketEvents(
 	}
 }
 
+async function* startWebSocketOutputOnFirstEvent(
+	events: AsyncIterable<StreamEventShape>,
+	output: AssistantMessage,
+	stream: AssistantMessageEventStream,
+	onStart: () => void,
+): AsyncIterable<StreamEventShape> {
+	let started = false;
+	for await (const event of events) {
+		if (!started) {
+			started = true;
+			onStart();
+			stream.push({ type: "start", partial: output });
+		}
+		yield event;
+	}
+}
+
 function isRetryableEarlyWebSocketError(error: unknown): boolean {
 	const message = error instanceof Error ? error.message : String(error);
-	return /^WebSocket (error|closed)(?:\s|$)/.test(message);
+	if (/message too big/i.test(message)) return false;
+	return /^(?:WebSocket (?:error|closed)(?:\s|$)|Invalid Codex WebSocket JSON)/.test(message);
 }
 
 async function* mapCodexEvents(events: AsyncIterable<StreamEventShape>): AsyncIterable<StreamEventShape> {
@@ -1193,11 +1230,12 @@ async function processWebSocketStream<TApi extends Api>(
 	let streamStarted = false;
 
 	for (let attempt = 0; attempt < 2; attempt++) {
-		const { socket, entry, release, reused } = await acquireWebSocket(url, headers, options?.sessionId, options?.signal);
+		const { socket, entry, release } = await acquireWebSocket(url, headers, options?.sessionId, options?.signal);
 		let keepConnection = true;
 		let released = false;
 		let eventCount = 0;
-		const useCachedContext = (options as { transport?: string } | undefined)?.transport === "websocket-cached";
+		const transport = (options as { transport?: string } | undefined)?.transport ?? "auto";
+		const useCachedContext = transport === "websocket-cached" || transport === "auto";
 		// ChatGPT Codex Responses rejects `store: true` ("Store must be set to false").
 		// WebSocket continuation still works via connection-scoped previous_response_id state.
 		const fullBody = body;
@@ -1211,15 +1249,18 @@ async function processWebSocketStream<TApi extends Api>(
 
 		try {
 			socket.send(JSON.stringify({ type: "response.create", ...requestBody }));
-			if (!streamStarted) {
-				onStart();
-				stream.push({ type: "start", partial: output });
-				streamStarted = true;
-			}
 			await processCapturedResponsesStream(
-				countWebSocketEvents(parseWebSocket(socket, options?.signal), () => {
-					eventCount++;
-				}),
+				startWebSocketOutputOnFirstEvent(
+					countWebSocketEvents(parseWebSocket(socket, options?.signal), () => {
+						eventCount++;
+					}),
+					output,
+					stream,
+					() => {
+						streamStarted = true;
+						onStart();
+					},
+				),
 				output,
 				stream,
 				model,
@@ -1248,11 +1289,10 @@ async function processWebSocketStream<TApi extends Api>(
 			}
 			keepConnection = false;
 			releaseOnce({ keep: false });
-			// Pi's stock provider reuses session WebSockets. In practice the Codex
-			// backend sometimes cleanly closes an idle cached socket between turns;
-			// if that stale socket fails before any response event, retry once on a
-			// fresh WebSocket without changing request shape or falling back transports.
-			if (attempt === 0 && reused && eventCount === 0 && !options?.signal?.aborted && isRetryableEarlyWebSocketError(error)) {
+			// If WebSocket fails before the first response event, nothing has been
+			// emitted to the UI/history yet. Retry once on a fresh WebSocket; if that
+			// also fails, the caller can fall back to SSE for `auto` transport.
+			if (attempt === 0 && eventCount === 0 && !streamStarted && !options?.signal?.aborted && isRetryableEarlyWebSocketError(error)) {
 				continue;
 			}
 			throw error;
@@ -1460,7 +1500,7 @@ function createCodexStream<TApi extends Api>(
 			const sseHeaders = buildSSEHeaders(model.headers, options?.headers, accountId, apiKey, options?.sessionId);
 			const websocketHeaders = buildWebSocketHeaders(model.headers, options?.headers, accountId, apiKey, websocketRequestId);
 			const bodyJson = JSON.stringify(body);
-			const transport = options?.transport || "sse";
+			const transport = options?.transport || "auto";
 
 			if (transport !== "sse") {
 				let websocketStarted = false;
@@ -1488,6 +1528,16 @@ function createCodexStream<TApi extends Api>(
 					stream.end();
 					return;
 				} catch (error) {
+					appendAssistantMessageDiagnostic(
+						output,
+						createAssistantMessageDiagnostic("provider_transport_failure", error, {
+							configuredTransport: transport,
+							fallbackTransport: websocketStarted ? undefined : "sse",
+							eventsEmitted: websocketStarted,
+							phase: websocketStarted ? "after_message_stream_start" : "before_message_stream_start",
+							requestBytes: new TextEncoder().encode(bodyJson).byteLength,
+						}),
+					);
 					if (transport === "websocket" || transport === "websocket-cached" || websocketStarted) {
 						throw error;
 					}
@@ -1656,6 +1706,7 @@ export function registerOpenAICodexCustomProvider(pi: ExtensionAPI, options: { g
 			flushPendingMessages();
 		}
 		clearPendingMessages();
+		closeOpenAICodexWebSocketSessions();
 	});
 
 	pi.on("agent_end", async () => {

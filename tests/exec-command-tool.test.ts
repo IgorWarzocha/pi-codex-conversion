@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createExecCommandTracker } from "../src/tools/exec-command-state.ts";
 import { registerExecCommandTool } from "../src/tools/exec-command-tool.ts";
 import { createExecSessionManager } from "../src/tools/exec-session-manager.ts";
