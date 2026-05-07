@@ -5,13 +5,36 @@ import os from "node:os";
 import path from "node:path";
 import {
 	buildProviderErrorMessage,
+	buildRequestBody,
 	buildGeneratedImageDisplayText,
 	buildWebSearchActivityMessage,
 	buildWebSearchSummaryText,
 	getOpenAICodexLatestImagePath,
 	getOpenAICodexImagePath,
+	parseSSE,
 	saveOpenAICodexGeneratedImage,
 } from "../src/providers/openai-codex-custom-provider.ts";
+
+const codexModel = {
+	provider: "openai-codex",
+	api: "openai-codex-responses",
+	id: "gpt-5.4",
+	input: ["text"],
+	output: ["text"],
+	contextWindow: 272000,
+	maxOutputTokens: 100000,
+	cost: { input: 0, output: 0 },
+} as never;
+
+test("buildRequestBody sends a non-empty fallback system prompt", () => {
+	const body = buildRequestBody(codexModel, { systemPrompt: "", messages: [] });
+	assert.equal(body.instructions, "You are a helpful assistant.");
+});
+
+test("buildRequestBody preserves provided system prompts", () => {
+	const body = buildRequestBody(codexModel, { systemPrompt: "Custom instructions", messages: [] });
+	assert.equal(body.instructions, "Custom instructions");
+});
 
 test("buildProviderErrorMessage marks websocket failures as Pi retryable connection errors", () => {
 	assert.equal(buildProviderErrorMessage(new Error("WebSocket error")), "Connection error: WebSocket error");
@@ -21,6 +44,15 @@ test("buildProviderErrorMessage marks websocket failures as Pi retryable connect
 		"Connection error: WebSocket stream closed before response.completed",
 	);
 	assert.equal(buildProviderErrorMessage(new Error("Unsupported parameter: max_output_tokens")), "Unsupported parameter: max_output_tokens");
+});
+
+test("parseSSE fails loudly on malformed Codex JSON", async () => {
+	const response = new Response("data: {not json}\n\n");
+	await assert.rejects(async () => {
+		for await (const _event of parseSSE(response)) {
+			// consume stream
+		}
+	}, /Invalid Codex SSE JSON/);
 });
 
 test("getOpenAICodexImagePath saves images under the repo-local .pi/openai-codex-images directory", () => {

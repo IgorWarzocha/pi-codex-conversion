@@ -9,7 +9,7 @@ This package replaces Pi's default Codex/GPT experience with a narrower Codex-li
 - preserves Pi's composed system prompt and applies a narrow Codex-oriented delta on top
 - renders exec activity with Codex-style command and background-terminal labels
 - renders `apply_patch` calls with Codex-style `Added` / `Edited` / `Deleted` diff blocks and Pi-style colored diff lines
-- targets modern Pi tool/rendering APIs and is aligned with Pi `0.72.x`
+- targets modern Pi tool/rendering APIs and is aligned with Pi `0.74.x` / the `@earendil-works/*` package scope
 
 ![Available tools](./available-tools.png)
 
