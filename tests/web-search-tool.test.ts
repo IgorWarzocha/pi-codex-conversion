@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import {
 	createWebSearchTool,
 	rewriteNativeWebSearchTool,
-	shouldShowWebSearchSessionNote,
 	supportsMultimodalNativeWebSearch,
 	supportsNativeWebSearch,
 } from "../src/tools/web-search-tool.ts";
@@ -62,41 +61,6 @@ test("rewriteNativeWebSearchTool leaves other providers untouched", () => {
 	assert.equal(
 		rewriteNativeWebSearchTool(payload, { provider: "openai", api: "openai-responses", id: "gpt-5" } as never),
 		payload,
-	);
-});
-
-test("shouldShowWebSearchSessionNote is gated to UI-backed openai-codex sessions and only shows once", () => {
-	assert.equal(
-		shouldShowWebSearchSessionNote(
-			{ provider: "openai-codex", api: "openai-codex-responses", id: "gpt-5.4" } as never,
-			true,
-			false,
-		),
-		true,
-	);
-	assert.equal(
-		shouldShowWebSearchSessionNote(
-			{ provider: "openai-codex", api: "openai-codex-responses", id: "gpt-5.4" } as never,
-			false,
-			false,
-		),
-		false,
-	);
-	assert.equal(
-		shouldShowWebSearchSessionNote(
-			{ provider: "github-copilot", api: "chat-completions", id: "gpt-5.4" } as never,
-			true,
-			false,
-		),
-		false,
-	);
-	assert.equal(
-		shouldShowWebSearchSessionNote(
-			{ provider: "openai-codex", api: "openai-codex-responses", id: "gpt-5.4" } as never,
-			true,
-			true,
-		),
-		false,
 	);
 });
 
