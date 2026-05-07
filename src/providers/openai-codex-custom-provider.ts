@@ -1,5 +1,5 @@
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { Box, Image, Spacer, Text } from "@mariozechner/pi-tui";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Box, Image, Spacer, Text } from "@earendil-works/pi-tui";
 import {
 	createAssistantMessageEventStream,
 	appendAssistantMessageDiagnostic,
@@ -12,7 +12,7 @@ import {
 	type Context,
 	type Model,
 	type SimpleStreamOptions,
-} from "@mariozechner/pi-ai";
+} from "@earendil-works/pi-ai";
 import type { ResponseCreateParamsStreaming } from "openai/resources/responses/responses.js";
 import {
 	convertResponsesMessages,
@@ -31,6 +31,7 @@ const BASE_DELAY_MS = 1000;
 const CODEX_TOOL_CALL_PROVIDERS = new Set(["openai", "openai-codex", "opencode"]);
 const CODEX_RESPONSE_STATUSES = new Set(["completed", "incomplete", "failed", "cancelled", "queued", "in_progress"]);
 const OPENAI_BETA_RESPONSES_WEBSOCKETS = "responses_websockets=2026-02-06";
+const WEBSOCKET_MESSAGE_TOO_BIG_CLOSE_CODE = 1009;
 const SESSION_WEBSOCKET_CACHE_TTL_MS = 5 * 60 * 1000;
 const dynamicImport = (specifier: string) => import(specifier);
 let _os: { platform(): string; release(): string; arch(): string } | null = null;
@@ -515,7 +516,7 @@ function resolveCodexServiceTier(responseServiceTier: ServiceTier, requestServic
 	return responseServiceTier ?? requestServiceTier;
 }
 
-function buildRequestBody<TApi extends Api>(model: Model<TApi>, context: Context, options?: SimpleStreamOptions): ResponsesBody {
+export function buildRequestBody<TApi extends Api>(model: Model<TApi>, context: Context, options?: SimpleStreamOptions): ResponsesBody {
 	const messages = convertResponsesMessages(model, context, CODEX_TOOL_CALL_PROVIDERS, {
 		includeSystemPrompt: false,
 	});
@@ -524,7 +525,7 @@ function buildRequestBody<TApi extends Api>(model: Model<TApi>, context: Context
 		model: model.id,
 		store: false,
 		stream: true,
-		instructions: context.systemPrompt,
+		instructions: context.systemPrompt || "You are a helpful assistant.",
 		input: messages,
 		text: { verbosity: ((options as { textVerbosity?: string } | undefined)?.textVerbosity ?? "low") as string },
 		include: ["reasoning.encrypted_content"],
@@ -595,7 +596,7 @@ function sleep(ms: number, signal: AbortSignal | undefined): Promise<void> {
 	});
 }
 
-async function* parseSSE(response: Response): AsyncIterable<StreamEventShape> {
+export async function* parseSSE(response: Response): AsyncIterable<StreamEventShape> {
 	if (!response.body) return;
 
 	const reader = response.body.getReader();
@@ -622,8 +623,8 @@ async function* parseSSE(response: Response): AsyncIterable<StreamEventShape> {
 					if (data && data !== "[DONE]") {
 						try {
 							yield JSON.parse(data) as StreamEventShape;
-						} catch {
-							// Ignore malformed SSE chunks and continue consuming the stream.
+						} catch (error) {
+							throw new Error(`Invalid Codex SSE JSON: ${error instanceof Error ? error.message : String(error)}`);
 						}
 					}
 				}
@@ -666,6 +667,28 @@ function closeWebSocketSilently(socket: WebSocketLike, code = 1000, reason = "do
 	}
 }
 
+export function closeOpenAICodexWebSocketSessions(sessionId?: string): void {
+	const closeEntry = (entry: SessionWebSocketCacheEntry) => {
+		if (entry.idleTimer) {
+			clearTimeout(entry.idleTimer);
+			entry.idleTimer = undefined;
+		}
+		closeWebSocketSilently(entry.socket, 1000, "session_shutdown");
+	};
+
+	if (sessionId) {
+		const entry = websocketSessionCache.get(sessionId);
+		if (entry) closeEntry(entry);
+		websocketSessionCache.delete(sessionId);
+		return;
+	}
+
+	for (const entry of websocketSessionCache.values()) {
+		closeEntry(entry);
+	}
+	websocketSessionCache.clear();
+}
+
 
 function scheduleSessionWebSocketExpiry(cacheKey: string, entry: SessionWebSocketCacheEntry): void {
 	if (entry.idleTimer) {
@@ -693,7 +716,10 @@ function extractWebSocketCloseError(event: unknown): Error {
 		const code = "code" in event ? (event as { code?: unknown }).code : undefined;
 		const reason = "reason" in event ? (event as { reason?: unknown }).reason : undefined;
 		const codeText = typeof code === "number" ? ` ${code}` : "";
-		const reasonText = typeof reason === "string" && reason.length > 0 ? ` ${reason}` : "";
+		let reasonText = typeof reason === "string" && reason.length > 0 ? ` ${reason}` : "";
+		if (!reasonText && code === WEBSOCKET_MESSAGE_TOO_BIG_CLOSE_CODE) {
+			reasonText = " message too big";
+		}
 		return new Error(`WebSocket closed${codeText}${reasonText}`.trim());
 	}
 	return new Error("WebSocket closed");
@@ -943,8 +969,9 @@ async function* parseWebSocket(socket: WebSocketLike, signal: AbortSignal | unde
 						done = true;
 					}
 					queue.push(parsed);
-				} catch {
-					// ignore malformed websocket messages
+				} catch (error) {
+					failed = new Error(`Invalid Codex WebSocket JSON: ${error instanceof Error ? error.message : String(error)}`);
+					done = true;
 				}
 			})
 			.catch((error: unknown) => {
@@ -1025,9 +1052,27 @@ async function* countWebSocketEvents(
 	}
 }
 
+async function* startWebSocketOutputOnFirstEvent(
+	events: AsyncIterable<StreamEventShape>,
+	output: AssistantMessage,
+	stream: AssistantMessageEventStream,
+	onStart: () => void,
+): AsyncIterable<StreamEventShape> {
+	let started = false;
+	for await (const event of events) {
+		if (!started) {
+			started = true;
+			onStart();
+			stream.push({ type: "start", partial: output });
+		}
+		yield event;
+	}
+}
+
 function isRetryableEarlyWebSocketError(error: unknown): boolean {
 	const message = error instanceof Error ? error.message : String(error);
-	return /^WebSocket (error|closed)(?:\s|$)/.test(message);
+	if (/message too big/i.test(message)) return false;
+	return /^(?:WebSocket (?:error|closed)(?:\s|$)|Invalid Codex WebSocket JSON)/.test(message);
 }
 
 async function* mapCodexEvents(events: AsyncIterable<StreamEventShape>): AsyncIterable<StreamEventShape> {
@@ -1185,7 +1230,7 @@ async function processWebSocketStream<TApi extends Api>(
 	let streamStarted = false;
 
 	for (let attempt = 0; attempt < 2; attempt++) {
-		const { socket, entry, release, reused } = await acquireWebSocket(url, headers, options?.sessionId, options?.signal);
+		const { socket, entry, release } = await acquireWebSocket(url, headers, options?.sessionId, options?.signal);
 		let keepConnection = true;
 		let released = false;
 		let eventCount = 0;
@@ -1204,15 +1249,18 @@ async function processWebSocketStream<TApi extends Api>(
 
 		try {
 			socket.send(JSON.stringify({ type: "response.create", ...requestBody }));
-			if (!streamStarted) {
-				onStart();
-				stream.push({ type: "start", partial: output });
-				streamStarted = true;
-			}
 			await processCapturedResponsesStream(
-				countWebSocketEvents(parseWebSocket(socket, options?.signal), () => {
-					eventCount++;
-				}),
+				startWebSocketOutputOnFirstEvent(
+					countWebSocketEvents(parseWebSocket(socket, options?.signal), () => {
+						eventCount++;
+					}),
+					output,
+					stream,
+					() => {
+						streamStarted = true;
+						onStart();
+					},
+				),
 				output,
 				stream,
 				model,
@@ -1241,11 +1289,10 @@ async function processWebSocketStream<TApi extends Api>(
 			}
 			keepConnection = false;
 			releaseOnce({ keep: false });
-			// Pi's stock provider reuses session WebSockets. In practice the Codex
-			// backend sometimes cleanly closes an idle cached socket between turns;
-			// if that stale socket fails before any response event, retry once on a
-			// fresh WebSocket without changing request shape or falling back transports.
-			if (attempt === 0 && reused && eventCount === 0 && !options?.signal?.aborted && isRetryableEarlyWebSocketError(error)) {
+			// If WebSocket fails before the first response event, nothing has been
+			// emitted to the UI/history yet. Retry once on a fresh WebSocket; if that
+			// also fails, the caller can fall back to SSE for `auto` transport.
+			if (attempt === 0 && eventCount === 0 && !streamStarted && !options?.signal?.aborted && isRetryableEarlyWebSocketError(error)) {
 				continue;
 			}
 			throw error;
@@ -1659,6 +1706,7 @@ export function registerOpenAICodexCustomProvider(pi: ExtensionAPI, options: { g
 			flushPendingMessages();
 		}
 		clearPendingMessages();
+		closeOpenAICodexWebSocketSessions();
 	});
 
 	pi.on("agent_end", async () => {

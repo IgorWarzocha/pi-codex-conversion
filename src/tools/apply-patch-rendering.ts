@@ -1,5 +1,5 @@
 import { isAbsolute, relative } from "node:path";
-import { renderDiff } from "@mariozechner/pi-coding-agent";
+import { renderDiff } from "@earendil-works/pi-coding-agent";
 import { openFileAtPath } from "../patch/paths.ts";
 import { parsePatchActions } from "../patch/parser.ts";
 import type { ParsedPatchAction } from "../patch/types.ts";

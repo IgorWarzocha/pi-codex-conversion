@@ -4,7 +4,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { initTheme } from "@mariozechner/pi-coding-agent";
+import { initTheme } from "@earendil-works/pi-coding-agent";
 import { formatApplyPatchCall, formatApplyPatchSummary, renderApplyPatchCall } from "../src/tools/apply-patch-rendering.ts";
 
 function stripAnsi(text: string): string {
