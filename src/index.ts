@@ -29,6 +29,7 @@ import {
 	WEB_SEARCH_SESSION_NOTE_TYPE,
 } from "./tools/web-search-tool.ts";
 import { registerWriteStdinTool } from "./tools/write-stdin-tool.ts";
+import { ensureBundledApplyPatchOnPath } from "./tools/apply-patch-binary.ts";
 
 interface AdapterState {
 	enabled: boolean;
@@ -57,6 +58,7 @@ function isToolCallOnlyAssistantMessage(message: unknown): boolean {
 }
 
 export default function codexConversion(pi: ExtensionAPI) {
+	ensureBundledApplyPatchOnPath();
 	const tracker = createExecCommandTracker();
 	const state: AdapterState = { enabled: false, cwd: process.cwd(), promptSkills: [] };
 	const sessions = createExecSessionManager();

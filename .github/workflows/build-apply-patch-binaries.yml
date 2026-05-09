@@ -1,0 +1,144 @@
+name: Build and publish package
+
+on:
+  push:
+    branches:
+      - dev
+      - main
+      - master
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish to npm after verification"
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: npm-publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: ${{ matrix.platform }}-${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            platform: linux
+            arch: x64
+            artifact_name: apply_patch
+          - os: ubuntu-24.04-arm
+            platform: linux
+            arch: arm64
+            artifact_name: apply_patch
+          - os: macos-26-intel
+            platform: darwin
+            arch: x64
+            artifact_name: apply_patch
+          - os: macos-26
+            platform: darwin
+            arch: arm64
+            artifact_name: apply_patch
+          - os: windows-2025
+            platform: win32
+            arch: x64
+            artifact_name: apply_patch.exe
+          - os: windows-11-arm
+            platform: win32
+            arch: arm64
+            artifact_name: apply_patch.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout package
+        uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build apply_patch
+        shell: bash
+        run: |
+          cd vendor/apply-patch-src
+          cargo build --release -p codex-apply-patch
+
+      - name: Stage binary
+        shell: bash
+        run: |
+          mkdir -p "vendor/apply-patch/${{ matrix.platform }}-${{ matrix.arch }}"
+          cp "vendor/apply-patch-src/target/release/${{ matrix.artifact_name }}" "vendor/apply-patch/${{ matrix.platform }}-${{ matrix.arch }}/${{ matrix.artifact_name }}"
+          chmod +x "vendor/apply-patch/${{ matrix.platform }}-${{ matrix.arch }}/${{ matrix.artifact_name }}" || true
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: apply-patch-${{ matrix.platform }}-${{ matrix.arch }}
+          path: vendor/apply-patch/${{ matrix.platform }}-${{ matrix.arch }}/${{ matrix.artifact_name }}
+          if-no-files-found: error
+
+  verify-and-publish:
+    name: Verify and publish npm package
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout package
+        uses: actions/checkout@v6
+
+      - name: Download binaries
+        uses: actions/download-artifact@v7
+        with:
+          pattern: apply-patch-*
+          path: vendor/apply-patch
+          merge-multiple: false
+
+      - name: Move artifacts into package layout
+        shell: bash
+        run: |
+          rm -rf vendor/apply-patch/{linux,darwin,win32}-* || true
+          for dir in vendor/apply-patch/apply-patch-*; do
+            target="${dir#vendor/apply-patch/apply-patch-}"
+            mkdir -p "vendor/apply-patch/$target"
+            find "$dir" -maxdepth 1 -type f -exec mv {} "vendor/apply-patch/$target/" \;
+            rmdir "$dir"
+          done
+          find vendor/apply-patch -maxdepth 2 -type f -print
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          registry-url: https://registry.npmjs.org/
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Stamp dev prerelease version
+        if: github.event_name == 'push' && github.ref_name == 'dev'
+        shell: bash
+        run: |
+          base_version="$(node -p "require('./package.json').version.replace(/-.*/, '')")"
+          short_sha="${GITHUB_SHA::7}"
+          npm version "${base_version}-dev.${GITHUB_RUN_NUMBER}.${short_sha}" --no-git-tag-version
+
+      - name: Verify package
+        run: |
+          npm run check
+          npm pack --dry-run --ignore-scripts
+
+      - name: Publish dev tag
+        if: github.event_name == 'push' && github.ref_name == 'dev'
+        run: npm publish --tag dev --access public
+
+      - name: Publish latest tag
+        if: github.event_name == 'push' && (github.ref_name == 'main' || github.ref_name == 'master')
+        run: npm publish --tag latest --access public
+
+      - name: Publish manual run
+        if: github.event_name == 'workflow_dispatch' && inputs.publish
+        run: npm publish --tag dev --access public
