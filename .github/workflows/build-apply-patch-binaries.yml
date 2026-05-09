@@ -106,6 +106,7 @@ jobs:
             find "$dir" -maxdepth 1 -type f -exec mv {} "vendor/apply-patch/$target/" \;
             rmdir "$dir"
           done
+          find vendor/apply-patch -type f -name apply_patch -exec chmod 755 {} \;
           find vendor/apply-patch -maxdepth 2 -type f -print
 
       - name: Setup Node
