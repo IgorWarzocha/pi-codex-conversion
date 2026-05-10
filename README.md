@@ -144,7 +144,7 @@ That keeps the prompt much closer to `pi-mono` while still steering the model to
 - `web_search` is exposed only for the `openai-codex` provider and is forwarded as the native OpenAI Codex Responses web search tool.
 - `image_generation` is exposed only for image-capable `openai-codex` models and is forwarded as the native OpenAI Codex Responses image-generation tool.
 - generated images are written under `.pi/openai-codex-images/` at the workspace/repo root, and the latest image is mirrored to `.pi/openai-codex-images/latest.png`.
-- `apply_patch` paths stay restricted to the current working directory.
+- `apply_patch` accepts absolute paths as-is and resolves relative paths against the current working directory.
 - partial `apply_patch` failures stay in the original patch block and highlight the failed entry instead of adding a second warning row.
 - `exec_command` / `write_stdin` use a custom PTY-backed session manager via `node-pty` for interactive sessions.
 - tiny `exec_command` waits are clamped for non-interactive commands so short runs do not burn an avoidable follow-up tool call.

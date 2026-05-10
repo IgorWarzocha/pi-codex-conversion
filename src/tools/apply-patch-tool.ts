@@ -280,12 +280,8 @@ export function registerApplyPatchTool(pi: ExtensionAPI): void {
 	pi.registerTool({
 		name: "apply_patch",
 		label: "apply_patch",
-		description: "Use `apply_patch` to edit files. Send the full patch in `input`.",
+		description: "Apply a patch to create, edit, delete, or move files.",
 		promptSnippet: "Edit files with a patch.",
-		promptGuidelines: [
-			"Prefer apply_patch for focused textual edits instead of rewriting whole files.",
-			"When one task needs coordinated edits across multiple files, send them in a single apply_patch call when one coherent patch will do.",
-		],
 		parameters: APPLY_PATCH_PARAMETERS,
 		prepareArguments: prepareApplyPatchArguments,
 		async execute(toolCallId, params, signal, _onUpdate, ctx) {

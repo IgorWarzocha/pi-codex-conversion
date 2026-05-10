@@ -50,12 +50,28 @@ test("buildCodexSystemPrompt preserves Pi-composed sections and adds a narrow Co
 	assert.match(prompt, /^Current shell: \/bin\/bash$/m);
 	assert.match(prompt, /^Current date: 2026-03-14$/m);
 	assert.match(prompt, /^Current working directory: \/tmp\/example-workspace$/m);
-	assert.match(prompt, /- Use `exec_command` for shell commands, file inspection, builds, and tests; prefer `rg` \/ `rg --files` for discovery\./);
+	assert.match(prompt, /- Use `exec_command` for shell commands, file inspection, builds, and tests; prefer `rg` \/ `rg --files` for discovery and focused commands over truncation\./);
 	assert.match(prompt, /- Use `apply_patch` for text-file changes, including creates\/deletes\/moves; group related multi-file edits into one patch\./);
+	assert.match(prompt, /- Prefer the `apply_patch` tool; use shell `apply_patch` only when chaining edits with other shell steps\./);
 	assert.match(prompt, /- Use `write_stdin` only for running `exec_command` sessions; poll sparingly\./);
 	assert.match(prompt, /- Run independent tool calls in parallel when practical\./);
+	assert.equal(prompt.match(/^Guidelines:$/gm)?.length, 1);
 	assert.doesNotMatch(prompt, /Codex mode guidelines:/);
 	assert.doesNotMatch(prompt, /Native `image_generation` outputs are saved/);
+});
+
+test("buildCodexSystemPrompt appends to Guidelines before Pi documentation with parenthetical", () => {
+	const prompt = buildCodexSystemPrompt(`Guidelines:
+- Be concise in your responses
+
+Pi documentation (read only when the user asks about pi itself):
+- Main documentation: /docs/README.md
+
+Current date: 2026-03-14`);
+
+	assert.equal(prompt.match(/^Guidelines:$/gm)?.length, 1);
+	assert.match(prompt, /Guidelines:\n- Be concise in your responses\n- Use `exec_command`/);
+	assert.match(prompt, /\n\nPi documentation \(read only when the user asks about pi itself\):/);
 });
 
 test("buildCodexSystemPrompt inserts fallback Guidelines when the base prompt has no Guidelines section", () => {

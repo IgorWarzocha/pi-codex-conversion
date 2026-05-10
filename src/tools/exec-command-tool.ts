@@ -8,16 +8,16 @@ import { formatUnifiedExecResult } from "./unified-exec-format.ts";
 
 const EXEC_COMMAND_PARAMETERS = Type.Object({
 	cmd: Type.String({ description: "Shell command to execute." }),
-	workdir: Type.Optional(Type.String({ description: "Optional working directory; defaults to the current turn cwd." })),
-	shell: Type.Optional(Type.String({ description: "Optional shell binary; defaults to the user's shell." })),
+	workdir: Type.Optional(Type.String({ description: "Defaults to current cwd." })),
+	shell: Type.Optional(Type.String({ description: "Defaults to the user's shell." })),
 	tty: Type.Optional(
 		Type.Boolean({
-			description: "Whether to allocate a TTY for the command. Defaults to false (plain pipes); set to true to open a PTY and access TTY process.",
+			description: "Allocate a TTY. Defaults to false.",
 		}),
 	),
-	yield_time_ms: Type.Optional(Type.Number({ description: "How long to wait in milliseconds for output before yielding." })),
-	max_output_tokens: Type.Optional(Type.Number({ description: "Maximum number of tokens to return. Excess output will be truncated." })),
-	login: Type.Optional(Type.Boolean({ description: "Whether to run the shell with -l/-i semantics. Defaults to true." })),
+	yield_time_ms: Type.Optional(Type.Number({ description: "Wait for output before yielding." })),
+	max_output_tokens: Type.Optional(Type.Number({ description: "Excess output will be truncated." })),
+	login: Type.Optional(Type.Boolean({ description: "Whether to run through a login-style shell so user PATH/toolchain setup is loaded. Defaults to true." })),
 });
 
 interface ExecCommandParams {
@@ -136,14 +136,8 @@ export function registerExecCommandTool(pi: ExtensionAPI, tracker: ExecCommandTr
 	pi.registerTool({
 		name: "exec_command",
 		label: "exec_command",
-		description: "Runs a command in a PTY, returning output or a session ID for ongoing interaction.",
+		description: "Runs a shell command, returning output or a session ID for ongoing interaction.",
 		promptSnippet: "Run a command.",
-		promptGuidelines: [
-			"Use exec_command for search, listing files, and local text-file reads.",
-			"Prefer rg or rg --files when possible.",
-			"For short or non-interactive commands, omit `yield_time_ms` so the default wait can avoid unnecessary follow-up calls.",
-			"Keep tty disabled unless the command truly needs interactive terminal behavior.",
-		],
 		parameters: EXEC_COMMAND_PARAMETERS,
 		prepareArguments: prepareExecCommandArguments,
 		async execute(toolCallId, params, signal, _onUpdate, ctx) {

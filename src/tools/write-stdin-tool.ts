@@ -6,10 +6,10 @@ import type { ExecSessionManager, UnifiedExecResult } from "./exec-session-manag
 import { formatUnifiedExecResult } from "./unified-exec-format.ts";
 
 const WRITE_STDIN_PARAMETERS = Type.Object({
-	session_id: Type.Number({ description: "Identifier of the running unified exec session." }),
-	chars: Type.Optional(Type.String({ description: "Bytes to write to stdin. May be empty to poll." })),
-	yield_time_ms: Type.Optional(Type.Number({ description: "How long to wait (in milliseconds) for output before yielding." })),
-	max_output_tokens: Type.Optional(Type.Number({ description: "Maximum number of tokens to return. Excess output will be truncated." })),
+	session_id: Type.Number({ description: "Running exec session ID." }),
+	chars: Type.Optional(Type.String({ description: "Bytes to write. Empty polls." })),
+	yield_time_ms: Type.Optional(Type.Number({ description: "Wait for output before yielding." })),
+	max_output_tokens: Type.Optional(Type.Number({ description: "Excess output will be truncated." })),
 });
 
 interface WriteStdinParams {
@@ -108,12 +108,8 @@ export function registerWriteStdinTool(pi: ExtensionAPI, sessions: ExecSessionMa
 	pi.registerTool({
 		name: "write_stdin",
 		label: "write_stdin",
-		description: "Writes characters to an existing unified exec session and returns recent output.",
+		description: "Writes to or polls a running exec session.",
 		promptSnippet: "Write to an exec session.",
-		promptGuidelines: [
-			"Use empty `chars` only to poll a running exec session.",
-			"When polling with empty `chars`, wait meaningfully between polls and do not repeatedly poll by reflex.",
-		],
 		parameters: WRITE_STDIN_PARAMETERS,
 		async execute(_toolCallId, params) {
 			const typed = parseWriteStdinParams(params);
