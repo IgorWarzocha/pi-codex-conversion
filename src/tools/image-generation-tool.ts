@@ -79,7 +79,7 @@ export function rewriteNativeImageGenerationTool(payload: unknown, model: Extens
 
 export function createImageGenerationTool(): ToolDefinition<typeof IMAGE_GENERATION_PARAMETERS> {
 	const description =
-		"Generate an image. Native openai-codex image_generation outputs are saved under `.pi/openai-codex-images/` and mirrored to `.pi/openai-codex-images/latest.png`.";
+		"Generate an image. Outputs are saved under `.pi/openai-codex-images/` and mirrored to `.pi/openai-codex-images/latest.png`.";
 	return {
 		name: "image_generation",
 		label: "image_generation",
