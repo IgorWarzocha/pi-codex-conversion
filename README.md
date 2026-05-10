@@ -1,20 +1,30 @@
 # pi-codex-conversion
 
-Codex-oriented adapter for [Pi](https://github.com/badlogic/pi-mono).
+Codex-style tools for [Pi](https://github.com/badlogic/pi-mono).
 
-This package replaces Pi's default Codex/GPT experience with a narrower Codex-like surface while staying close to Pi's own runtime and prompt construction:
+GPT/Codex models are strongest when the tool surface looks like the Codex CLI they were trained around: shell commands, resumable terminal sessions, and patch-based edits. This extension brings that workflow to Pi while keeping Pi's runtime, sessions, project context, skills, and UI.
 
-- swaps active tools to `exec_command`, `write_stdin`, `apply_patch`, `view_image`, plus native OpenAI Codex Responses `web_search` and `image_generation` on `openai-codex`
-- saves native Codex image-generation outputs into `.pi/openai-codex-images/` at the workspace/repo root and mirrors the newest image to `.pi/openai-codex-images/latest.png`
-- preserves Pi's composed system prompt and applies a narrow Codex-oriented delta on top
-- renders exec activity with Codex-style command and background-terminal labels
-- renders `apply_patch` calls with Codex-style `Added` / `Edited` / `Deleted` diff blocks and Pi-style colored diff lines
-- targets modern Pi tool/rendering APIs and is aligned with Pi `0.74.x` / the `@earendil-works/*` package scope
+The point is to give the model tools it already knows how to use well: shell-first inspection, resumable command sessions, and large one-shot patch edits instead of piecemeal read/edit/write steps.
+
+## Install
+
+```bash
+pi install npm:@howaboua/pi-codex-conversion
+```
+
+Try the current checkout without installing globally:
+
+```bash
+pi --no-extensions --no-skills -e /path/to/pi-codex-conversion
+```
+
+Alternative Git install:
+
+```bash
+pi install git:github.com/IgorWarzocha/pi-codex-conversion
+```
 
 ![Available tools](./available-tools.png)
-
-> [!NOTE]
-> Native OpenAI Codex Responses web search activity is surfaced as merged foldable status messages. Pi still does not expose native web-search usage as true tool-call rows.
 
 ## Active tools in adapter mode
 
@@ -34,123 +44,32 @@ Notably:
 - file creation and edits should default to `apply_patch`
 - Pi may still expose additional runtime tools such as `parallel`; the prompt is written to tolerate that instead of assuming a fixed four-tool universe
 
-## Layout
+## What changes in Pi
 
-- `src/index.ts` — extension entrypoint, model gating, tool-set swapping, prompt transformation
-- `src/adapter/` — model detection and active-tool constants
-- `src/tools/` — Pi tool wrappers, exec session management, and execution rendering
-- `src/shell/` — shell tokenization, parsing, and exploration summaries
-- `src/patch/` — patch parsing, path policy, and execution
-- `src/prompt/` — Codex delta transformer over Pi's composed prompt
-- `tests/` — deterministic unit tests
+- Adapter mode activates automatically for OpenAI `gpt*` and `codex*` models, then restores the previous tool set when you switch away.
+- Pi's composed prompt is preserved; the extension only adds a small Codex-style tool-use nudge.
+- Shell activity is rendered with Codex-like labels such as `Ran`, `Explored`, `Read`, and background-terminal status.
+- `apply_patch` renders as Codex-style `Added` / `Edited` / `Deleted` blocks, including inline partial-failure state.
+- Native web search appears as a compact expandable summary after a turn, with queries and sources in the expanded view.
+- Generated images are saved under `.pi/openai-codex-images/` at the workspace/repo root, with the latest image mirrored to `latest.png`.
 
-## Checks
-
-```bash
-npm run typecheck
-npm test
-npm run check
-```
-
-## Examples
+## Command rendering examples
 
 - `rg -n foo src` -> `Explored / Search foo in src`
 - `rg --files src | head -n 50` -> `Explored / List src`
 - `cat README.md` -> `Explored / Read README.md`
-- `exec_command({ cmd: "npm test", yield_time_ms: 1000 })` may return `session_id`, then continue with `write_stdin`
-- for short or non-interactive commands, omitting `yield_time_ms` is preferred; tiny non-interactive waits are clamped upward to avoid unnecessary follow-up calls
-- `write_stdin({ session_id, chars: "" })` renders like `Waited for background terminal` and is meant for occasional polling, not tight repoll loops
-- `write_stdin({ session_id, chars: "y\\n" })` renders like `Interacted with background terminal`
-- `view_image({ path: "/absolute/path/to/screenshot.png" })` is available on image-capable models
-- `web_search` is surfaced only on `openai-codex`, and the adapter rewrites it into the native OpenAI Responses `type: "web_search"` payload instead of executing a local function tool
-- `image_generation` is surfaced only on image-capable `openai-codex` models, and the adapter rewrites it into the native OpenAI Responses `type: "image_generation", output_format: "png"` payload instead of executing a local function tool
-- native `image_generation` outputs are saved under `.pi/openai-codex-images/` at the workspace/repo root, with the newest image mirrored to `.pi/openai-codex-images/latest.png`
-- when native web search is available, the adapter shows a one-time session notice and merged foldable search-activity messages instead of native tool-call rows
-- `apply_patch` partial failures stay inline in the patch row so successful and failed file entries can be seen together
+- `npm test` -> `Ran npm test`
+- `write_stdin({ session_id, chars: "" })` -> `Waited for background terminal`
+- `write_stdin({ session_id, chars: "y\n" })` -> `Interacted with background terminal`
 
 Raw command output is still available by expanding the tool result.
 
-## Install
+## Details worth knowing
 
-```bash
-pi install npm:@howaboua/pi-codex-conversion
-```
-
-Local development:
-
-```bash
-pi install ./pi-codex-conversion
-```
-
-Alternative Git install:
-
-```bash
-pi install git:github.com/IgorWarzocha/pi-codex-conversion
-```
-
-## Publishing
-
-This package is already configured for public npm publishes via:
-
-- `publishConfig.access = "public"`
-- `prepublishOnly` / `prepack` checks
-
-Useful commands:
-
-```bash
-npm run publish:dry-run
-npm run publish:dev
-npm run release:dev
-```
-
-What they do:
-
-- `npm run publish:dry-run` — inspect what would be published
-- `npm run publish:dev` — publish the current version under the `dev` dist-tag
-- `npm run release:dev` — bump the package to the next `-dev.N` prerelease and publish it under the `dev` dist-tag
-
-Typical flow:
-
-```bash
-npm login
-npm run publish:dry-run
-npm run release:dev
-```
-
-For modern npm auth, just run `npm login` and complete the browser flow when prompted.
-
-After publishing, install the dev build with:
-
-```bash
-pi install npm:@howaboua/pi-codex-conversion@dev
-```
-
-## Prompt behavior
-
-The adapter does not build a standalone replacement prompt anymore. Instead it:
-
-- keeps Pi's tool descriptions, Pi docs section, AGENTS/project context, skills inventory, and date/cwd when Pi already surfaced them
-- adds the current shell to the transformed prompt so quoting and escaping can match the runtime environment
-- rewrites the top-level role framing to Codex-style wording
-- adds a small Codex delta to the existing `Guidelines` section
-
-That keeps the prompt much closer to `pi-mono` while still steering the model toward Codex-style tool use.
-
-## Notes
-
-- Adapter mode activates automatically for OpenAI `gpt*` and `codex*` models.
-- When you switch away from those models, Pi restores the previous active tool set.
-- `view_image` resolves paths against the active session cwd and only exposes `detail: "original"` for Codex-family image-capable models.
-- `web_search` is exposed only for the `openai-codex` provider and is forwarded as the native OpenAI Codex Responses web search tool.
-- `image_generation` is exposed only for image-capable `openai-codex` models and is forwarded as the native OpenAI Codex Responses image-generation tool.
-- generated images are written under `.pi/openai-codex-images/` at the workspace/repo root, and the latest image is mirrored to `.pi/openai-codex-images/latest.png`.
+- `exec_command` and `write_stdin` use a PTY-backed session manager for interactive commands and long-running processes.
 - `apply_patch` accepts absolute paths as-is and resolves relative paths against the current working directory.
-- partial `apply_patch` failures stay in the original patch block and highlight the failed entry instead of adding a second warning row.
-- `exec_command` / `write_stdin` use a custom PTY-backed session manager via `node-pty` for interactive sessions.
-- tiny `exec_command` waits are clamped for non-interactive commands so short runs do not burn an avoidable follow-up tool call.
-- empty `write_stdin` polls are clamped to a meaningful minimum wait so long-running processes are not repolled too aggressively.
-- PTY output handling applies basic terminal rewrite semantics (`\r`, `\b`, erase-in-line, and common escape cleanup) so interactive redraws replay sensibly.
-- Skills inventory is reintroduced in a Codex-style section when Pi's composed prompt already exposed the underlying Pi skills inventory.
+- Shell `apply_patch` is also available inside `exec_command`, but the dedicated `apply_patch` tool is preferred unless you are chaining edits with other shell steps.
+- Native `web_search` and `image_generation` are forwarded to OpenAI Codex Responses tools rather than executed as local function tools.
 
 ## License
 
