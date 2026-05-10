@@ -4,6 +4,13 @@ export interface PromptSkill {
 	filePath: string;
 }
 
+export interface StructuredPromptSkill {
+	name: string;
+	description: string;
+	filePath: string;
+	disableModelInvocation?: boolean;
+}
+
 const CODEX_GUIDELINES = [
 	"Use `exec_command` for shell commands, file inspection, builds, and tests; prefer `rg` / `rg --files` for discovery and focused commands over truncation.",
 	"Use `apply_patch` for text-file changes, including creates/deletes/moves; group related multi-file edits into one patch.",
@@ -54,6 +61,27 @@ export function extractPiPromptSkills(prompt: string): PromptSkill[] {
 		description: decodeXml(match[2].trim()),
 		filePath: decodeXml(match[3].trim()),
 	}));
+}
+
+export function promptSkillsFromStructuredSkills(skills: readonly StructuredPromptSkill[] | undefined): PromptSkill[] {
+	if (!Array.isArray(skills)) {
+		return [];
+	}
+
+	return skills
+		.filter((skill) => !skill.disableModelInvocation)
+		.map((skill) => ({
+			name: skill.name,
+			description: skill.description,
+			filePath: skill.filePath,
+		}));
+}
+
+export function resolvePromptSkills(
+	structuredSkills: readonly StructuredPromptSkill[] | undefined,
+	fallbackSkills: readonly PromptSkill[],
+): PromptSkill[] {
+	return structuredSkills === undefined ? [...fallbackSkills] : promptSkillsFromStructuredSkills(structuredSkills);
 }
 
 function injectSkills(prompt: string, skills: PromptSkill[]): string {
