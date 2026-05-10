@@ -44,7 +44,7 @@
     "publish:dev": "npm publish --tag dev",
     "release:dev": "npm version prerelease --preid dev && npm publish --tag dev",
     "prepack": "npm run check",
-    "prepublishOnly": "npm run verify:apply-patch-binaries && npm run check",
+    "prepublishOnly": "npm run verify:apply-patch-binaries",
     "build:apply-patch": "node scripts/build-apply-patch-binary.mjs",
     "sync:apply-patch-source": "node scripts/sync-apply-patch-source.mjs",
     "verify:apply-patch-binaries": "node scripts/verify-apply-patch-binaries.mjs"
