@@ -5,15 +5,11 @@ export interface PromptSkill {
 }
 
 const CODEX_GUIDELINES = [
-	"Prefer a single `apply_patch` call that updates all related files together when one coherent patch will do.",
-	"When making coordinated edits across multiple files, include them in one `apply_patch` call instead of splitting them into separate patches.",
-	"When multiple tool calls are independent, emit them together so they can execute in parallel instead of serializing them.",
-	"Use `parallel` only when tool calls are independent and can safely run at the same time.",
-	"Use `write_stdin` when an exec session returns `session_id`, and continue until `exit_code` is present.",
-	"For short or non-interactive commands, prefer the default `exec_command` wait instead of a tiny `yield_time_ms` that forces an extra follow-up call.",
-	"When polling a running exec session with empty `chars`, wait meaningfully between polls and do not repeatedly poll by reflex.",
-	"Do not request `tty` unless interactive terminal behavior is required.",
-	"Native `image_generation` outputs are saved under `.pi/openai-codex-images/` and mirrored to `.pi/openai-codex-images/latest.png`. Use `view_image` only when pixel-level inspection is necessary.",
+	"Use `exec_command` for shell commands, file inspection, builds, and tests; prefer `rg` / `rg --files` for discovery and focused commands over truncation.",
+	"Use `apply_patch` for text-file changes, including creates/deletes/moves; group related multi-file edits into one patch.",
+	"Prefer the `apply_patch` tool; use shell `apply_patch` only when chaining edits with other shell steps.",
+	"Use `write_stdin` only for running `exec_command` sessions; poll sparingly.",
+	"Run independent tool calls in parallel when practical.",
 ];
 
 function insertBeforeTrailingContext(prompt: string, section: string): string {
@@ -88,9 +84,9 @@ function injectSkills(prompt: string, skills: PromptSkill[]): string {
 }
 
 function injectGuidelines(prompt: string): string {
-	const match = prompt.match(/(^Guidelines:\n)([\s\S]*?)(\n\n(?:Pi documentation:|# Project Context|# Skills|Current date:))/m);
+	const match = prompt.match(/(^Guidelines:\n)([\s\S]*?)(\n\n(?=Pi documentation\b|# Project Context|# Skills|Current date:))/m);
 	if (!match || match.index === undefined) {
-		const fallbackSection = `Codex mode guidelines:\n${CODEX_GUIDELINES.map((line) => `- ${line}`).join("\n")}`;
+		const fallbackSection = `Guidelines:\n${CODEX_GUIDELINES.map((line) => `- ${line}`).join("\n")}`;
 		return insertBeforeTrailingContext(prompt, fallbackSection);
 	}
 

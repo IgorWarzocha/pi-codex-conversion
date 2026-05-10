@@ -29,6 +29,7 @@ import {
 	WEB_SEARCH_SESSION_NOTE_TYPE,
 } from "./tools/web-search-tool.ts";
 import { registerWriteStdinTool } from "./tools/write-stdin-tool.ts";
+import { ensureBundledApplyPatchOnPath } from "./tools/apply-patch-binary.ts";
 
 interface AdapterState {
 	enabled: boolean;
@@ -57,6 +58,7 @@ function isToolCallOnlyAssistantMessage(message: unknown): boolean {
 }
 
 export default function codexConversion(pi: ExtensionAPI) {
+	ensureBundledApplyPatchOnPath();
 	const tracker = createExecCommandTracker();
 	const state: AdapterState = { enabled: false, cwd: process.cwd(), promptSkills: [] };
 	const sessions = createExecSessionManager();
@@ -163,8 +165,9 @@ function enableAdapter(pi: ExtensionAPI, ctx: ExtensionContext, state: AdapterSt
 	const toolNames = mergeAdapterTools(pi.getActiveTools(), getAdapterToolNames(ctx));
 	if (!state.enabled) {
 		// Preserve the previous active set once so switching away from Codex-like
-		// models restores the user's existing Pi tool configuration.
-		state.previousToolNames = pi.getActiveTools();
+		// models restores the user's existing Pi tool configuration. Strip adapter
+		// tools in case a fresh session starts from persisted/mixed active tools.
+		state.previousToolNames = stripAdapterTools(pi.getActiveTools());
 		state.enabled = true;
 	}
 	pi.setActiveTools(toolNames);
@@ -208,13 +211,17 @@ export function mergeAdapterTools(activeTools: string[], adapterTools: string[])
 }
 
 export function restoreTools(previousTools: string[], activeTools: string[]): string[] {
-	const restored = [...previousTools];
+	const restored = stripAdapterTools(previousTools);
 	for (const toolName of activeTools) {
 		if (!ADAPTER_TOOL_NAMES.includes(toolName) && !restored.includes(toolName)) {
 			restored.push(toolName);
 		}
 	}
 	return restored;
+}
+
+export function stripAdapterTools(toolNames: string[]): string[] {
+	return toolNames.filter((toolName) => !ADAPTER_TOOL_NAMES.includes(toolName));
 }
 
 function hasAdapterTools(activeTools: string[]): boolean {

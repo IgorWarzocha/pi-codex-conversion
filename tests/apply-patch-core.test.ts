@@ -36,26 +36,26 @@ test("executePatch updates, adds, and moves files inside cwd", async () => {
 	}
 });
 
-test("executePatch rejects paths that escape cwd", async () => {
+test("executePatch resolves relative paths against cwd", async () => {
 	const cwd = mkdtempSync(join(tmpdir(), "pi-codex-conversion-"));
 	try {
-		assert.throws(
-			() =>
-				executePatch({
-					cwd,
-					patchText: `*** Begin Patch
-*** Add File: ../escape.txt
-+nope
+		const result = executePatch({
+			cwd,
+			patchText: `*** Begin Patch
+*** Add File: nested/relative.txt
++hello relative
 *** End Patch`,
-				}),
-			/path escapes working directory/i,
-		);
+		});
+
+		assert.deepEqual(result.changedFiles, ["nested/relative.txt"]);
+		assert.deepEqual(result.createdFiles, ["nested/relative.txt"]);
+		assert.equal(readFileSync(join(cwd, "nested/relative.txt"), "utf8"), "hello relative\n");
 	} finally {
 		await rm(cwd, { recursive: true, force: true });
 	}
 });
 
-test("executePatch allows absolute paths", async () => {
+test("executePatch accepts absolute paths as-is", async () => {
 	const cwd = mkdtempSync(join(tmpdir(), "pi-codex-conversion-"));
 	const absolutePath = join(cwd, "absolute.txt");
 	try {

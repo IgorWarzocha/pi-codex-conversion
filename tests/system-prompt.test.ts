@@ -50,23 +50,37 @@ test("buildCodexSystemPrompt preserves Pi-composed sections and adds a narrow Co
 	assert.match(prompt, /^Current shell: \/bin\/bash$/m);
 	assert.match(prompt, /^Current date: 2026-03-14$/m);
 	assert.match(prompt, /^Current working directory: \/tmp\/example-workspace$/m);
-	assert.match(prompt, /- Prefer a single `apply_patch` call that updates all related files together when one coherent patch will do\./);
-	assert.match(prompt, /- When making coordinated edits across multiple files, include them in one `apply_patch` call instead of splitting them into separate patches\./);
-	assert.match(prompt, /- When multiple tool calls are independent, emit them together so they can execute in parallel instead of serializing them\./);
-	assert.match(prompt, /- Use `parallel` only when tool calls are independent and can safely run at the same time\./);
-	assert.match(prompt, /- Use `write_stdin` when an exec session returns `session_id`, and continue until `exit_code` is present\./);
-	assert.match(prompt, /- For short or non-interactive commands, prefer the default `exec_command` wait instead of a tiny `yield_time_ms` that forces an extra follow-up call\./);
-	assert.match(prompt, /- When polling a running exec session with empty `chars`, wait meaningfully between polls and do not repeatedly poll by reflex\./);
-	assert.match(prompt, /- Do not request `tty` unless interactive terminal behavior is required\./);
-	assert.match(prompt, /- Native `image_generation` outputs are saved under `\.pi\/openai-codex-images\/` and mirrored to `\.pi\/openai-codex-images\/latest\.png`\./);
+	assert.match(prompt, /- Use `exec_command` for shell commands, file inspection, builds, and tests; prefer `rg` \/ `rg --files` for discovery and focused commands over truncation\./);
+	assert.match(prompt, /- Use `apply_patch` for text-file changes, including creates\/deletes\/moves; group related multi-file edits into one patch\./);
+	assert.match(prompt, /- Prefer the `apply_patch` tool; use shell `apply_patch` only when chaining edits with other shell steps\./);
+	assert.match(prompt, /- Use `write_stdin` only for running `exec_command` sessions; poll sparingly\./);
+	assert.match(prompt, /- Run independent tool calls in parallel when practical\./);
+	assert.equal(prompt.match(/^Guidelines:$/gm)?.length, 1);
+	assert.doesNotMatch(prompt, /Codex mode guidelines:/);
+	assert.doesNotMatch(prompt, /Native `image_generation` outputs are saved/);
 });
 
-test("buildCodexSystemPrompt appends fallback guidance when the base prompt has no Guidelines section", () => {
+test("buildCodexSystemPrompt appends to Guidelines before Pi documentation with parenthetical", () => {
+	const prompt = buildCodexSystemPrompt(`Guidelines:
+- Be concise in your responses
+
+Pi documentation (read only when the user asks about pi itself):
+- Main documentation: /docs/README.md
+
+Current date: 2026-03-14`);
+
+	assert.equal(prompt.match(/^Guidelines:$/gm)?.length, 1);
+	assert.match(prompt, /Guidelines:\n- Be concise in your responses\n- Use `exec_command`/);
+	assert.match(prompt, /\n\nPi documentation \(read only when the user asks about pi itself\):/);
+});
+
+test("buildCodexSystemPrompt inserts fallback Guidelines when the base prompt has no Guidelines section", () => {
 	const prompt = buildCodexSystemPrompt(`Custom prompt\n\nCurrent date: 2026-03-14\nCurrent working directory: /tmp/example-workspace`, {
 		shell: "/bin/zsh",
 	});
 
-	assert.match(prompt, /Codex mode guidelines:/);
+	assert.match(prompt, /^Guidelines:$/m);
+	assert.doesNotMatch(prompt, /Codex mode guidelines:/);
 	assert.match(prompt, /^Current shell: \/bin\/zsh$/m);
 	assert.match(prompt, /^Current date: 2026-03-14$/m);
 });

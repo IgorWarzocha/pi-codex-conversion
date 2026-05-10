@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
-import { dirname, isAbsolute, relative, resolve } from "node:path";
+import { dirname, isAbsolute, resolve } from "node:path";
 import { DiffError } from "./types.ts";
 
 export function normalizePatchPath({ path }: { path: string }): string {
@@ -8,20 +8,15 @@ export function normalizePatchPath({ path }: { path: string }): string {
 	return withoutAt.replace(/^['"]|['"]$/g, "");
 }
 
-// Relative patch paths stay anchored to ctx.cwd. Absolute patch paths are
-// accepted as-is so the adapter can match Codex-style path usage.
+// Match Codex apply_patch path handling: absolute patch paths are accepted
+// as-is, while relative paths are resolved against ctx.cwd.
 export function resolvePatchPath({ cwd, patchPath }: { cwd: string; patchPath: string }): string {
 	const normalized = normalizePatchPath({ path: patchPath });
 	if (!normalized) {
 		throw new DiffError("Patch path cannot be empty");
 	}
 
-	const absolutePath = isAbsolute(normalized) ? normalized : resolve(cwd, normalized);
-	const rel = relative(cwd, absolutePath);
-	if (!isAbsolute(normalized) && (rel.startsWith("..") || isAbsolute(rel))) {
-		throw new DiffError(`Path escapes working directory: ${normalized}`);
-	}
-	return absolutePath;
+	return isAbsolute(normalized) ? normalized : resolve(cwd, normalized);
 }
 
 export function openFileAtPath({ cwd, path }: { cwd: string; path: string }): string {

@@ -12,7 +12,7 @@ import { Text } from "@earendil-works/pi-tui";
 
 const VIEW_IMAGE_UNSUPPORTED_MESSAGE = "view_image is not allowed because you do not support image inputs";
 const DETAIL_DESCRIPTION =
-	"Optional detail override. The only supported value is `original`; omit this field for default resized behavior. Use `original` to preserve the file's original resolution instead of resizing to fit. This is important when high-fidelity image perception or precise localization is needed, especially for CUA agents.";
+	"Use `original` to preserve the file's original resolution; omit for default resized behavior.";
 
 interface ViewImageParams {
 	path: string;
@@ -37,7 +37,7 @@ type ViewImageParameters = ReturnType<typeof createViewImageParameters>;
 
 function createViewImageParameters(allowOriginalDetail: boolean) {
 	const properties: Record<string, TSchema> = {
-		path: Type.String({ description: "Local filesystem path to an image file" }),
+		path: Type.String({ description: "Local image file path." }),
 	};
 	if (allowOriginalDetail) {
 		properties.detail = Type.Optional(Type.String({ description: DETAIL_DESCRIPTION }));
@@ -143,10 +143,8 @@ export function createViewImageTool(options: CreateViewImageToolOptions = {}): T
 	return {
 		name: "view_image",
 		label: "view_image",
-		description:
-			"View a local image from the filesystem (only use if given a full filepath by the user, and the image isn't already attached to the thread context within <image ...> tags).",
+		description: "View a local image file.",
 		promptSnippet: "View a local image from the filesystem.",
-		promptGuidelines: ["Use view_image only for image files. Use exec_command for text-file inspection."],
 		parameters,
 		prepareArguments: prepareViewImageArguments,
 		async execute(toolCallId, params, signal, _onUpdate, ctx) {
