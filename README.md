@@ -2,6 +2,9 @@
 
 Codex-style tools for [Pi](https://github.com/badlogic/pi-mono).
 
+> [!NOTE]
+> Use the npm package for normal installs. Avoid `pi install git:...` unless you know you want the development checkout; see [Development checkout](#development-checkout).
+
 GPT/Codex models are strongest when the tool surface looks like the Codex CLI they were trained around: shell commands, resumable terminal sessions, and patch-based edits. This extension brings that workflow to Pi while keeping Pi's runtime, sessions, project context, skills, and UI.
 
 The point is to give the model tools it already knows how to use well: shell-first inspection, resumable command sessions, and large one-shot patch edits instead of piecemeal read/edit/write steps.
@@ -12,16 +15,14 @@ The point is to give the model tools it already knows how to use well: shell-fir
 pi install npm:@howaboua/pi-codex-conversion
 ```
 
-Try the current checkout without installing globally:
+## Development checkout
+
+The Git checkout is mostly for development and mirrors the maintainer workflow. If you run it directly, you may need to build the bundled `apply_patch` binary for your platform.
+
+Run the current checkout without installing globally:
 
 ```bash
 pi --no-extensions --no-skills -e /path/to/pi-codex-conversion
-```
-
-Alternative Git install:
-
-```bash
-pi install git:github.com/IgorWarzocha/pi-codex-conversion
 ```
 
 ![Available tools](./available-tools.png)
