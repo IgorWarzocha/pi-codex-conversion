@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mergeAdapterTools, restoreTools } from "../src/index.ts";
+import { mergeAdapterTools, restoreTools, stripAdapterTools } from "../src/index.ts";
 
 test("mergeAdapterTools replaces Pi core tools but preserves unrelated active tools", () => {
 	assert.deepEqual(
@@ -20,5 +20,22 @@ test("restoreTools strips adapter tools from mixed startup state while keeping u
 	assert.deepEqual(
 		restoreTools(["read", "bash", "edit", "write"], ["read", "bash", "edit", "write", "apply_patch", "exec_command", "write_stdin", "web_search", "image_generation", "parallel"]),
 		["read", "bash", "edit", "write", "parallel"],
+	);
+});
+
+test("restoreTools strips adapter tools from the preserved previous tool set", () => {
+	assert.deepEqual(
+		restoreTools(
+			["read", "bash", "edit", "write", "exec_command", "write_stdin", "apply_patch"],
+			["read", "bash", "edit", "write", "exec_command", "write_stdin", "apply_patch"],
+		),
+		["read", "bash", "edit", "write"],
+	);
+});
+
+test("stripAdapterTools removes every adapter-owned tool", () => {
+	assert.deepEqual(
+		stripAdapterTools(["read", "exec_command", "write_stdin", "apply_patch", "web_search", "image_generation", "view_image", "parallel"]),
+		["read", "parallel"],
 	);
 });
