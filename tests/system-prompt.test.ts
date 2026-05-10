@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildCodexSystemPrompt, extractPiPromptSkills } from "../src/prompt/build-system-prompt.ts";
+import { buildCodexSystemPrompt, extractPiPromptSkills, promptSkillsFromStructuredSkills, resolvePromptSkills } from "../src/prompt/build-system-prompt.ts";
 
 const PI_BASE_PROMPT = `You are an expert coding assistant operating inside pi, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.
 
@@ -164,4 +164,70 @@ Suffix`);
 			filePath: "/skills/agent-native-hardening/SKILL.md",
 		},
 	]);
+});
+
+test("promptSkillsFromStructuredSkills maps Pi skills and skips explicit invocation-only skills", () => {
+	const skills = promptSkillsFromStructuredSkills([
+		{
+			name: "agent-native-hardening",
+			description: "Hardening workflow for JS and TS repos",
+			filePath: "/skills/agent-native-hardening/SKILL.md",
+		},
+		{
+			name: "manual-only",
+			description: "Only loaded by explicit command",
+			filePath: "/skills/manual-only/SKILL.md",
+			disableModelInvocation: true,
+		},
+	]);
+
+	assert.deepEqual(skills, [
+		{
+			name: "agent-native-hardening",
+			description: "Hardening workflow for JS and TS repos",
+			filePath: "/skills/agent-native-hardening/SKILL.md",
+		},
+	]);
+});
+
+test("promptSkillsFromStructuredSkills returns empty when structured skills are unavailable", () => {
+	assert.deepEqual(promptSkillsFromStructuredSkills(undefined), []);
+});
+
+test("resolvePromptSkills uses structured empty lists instead of stale fallback skills", () => {
+	const fallback = [
+		{
+			name: "stale-skill",
+			description: "No longer loaded",
+			filePath: "/skills/stale-skill/SKILL.md",
+		},
+	];
+
+	assert.deepEqual(resolvePromptSkills([], fallback), []);
+	assert.deepEqual(
+		resolvePromptSkills(
+			[
+				{
+					name: "manual-only",
+					description: "Only loaded by explicit command",
+					filePath: "/skills/manual-only/SKILL.md",
+					disableModelInvocation: true,
+				},
+			],
+			fallback,
+		),
+		[],
+	);
+});
+
+test("resolvePromptSkills falls back to scraped skills when structured skills are unavailable", () => {
+	const fallback = [
+		{
+			name: "scraped-skill",
+			description: "Scraped from the rendered prompt",
+			filePath: "/skills/scraped-skill/SKILL.md",
+		},
+	];
+
+	assert.deepEqual(resolvePromptSkills(undefined, fallback), fallback);
 });

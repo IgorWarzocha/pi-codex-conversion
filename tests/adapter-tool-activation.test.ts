@@ -1,6 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mergeAdapterTools, restoreTools, stripAdapterTools } from "../src/index.ts";
+import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { getCodexSkillPaths, mergeAdapterTools, restoreTools, stripAdapterTools } from "../src/index.ts";
 
 test("mergeAdapterTools replaces Pi core tools but preserves unrelated active tools", () => {
 	assert.deepEqual(
@@ -38,4 +41,23 @@ test("stripAdapterTools removes every adapter-owned tool", () => {
 		stripAdapterTools(["read", "exec_command", "write_stdin", "apply_patch", "web_search", "image_generation", "view_image", "parallel"]),
 		["read", "parallel"],
 	);
+});
+
+test("getCodexSkillPaths discovers existing global and ancestor project Codex skill directories", () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-codex-skills-"));
+	try {
+		const home = join(root, "home");
+		const repo = join(root, "workspace");
+		const cwd = join(repo, "packages", "app");
+		const globalSkills = join(home, ".agents", "skills");
+		const repoSkills = join(repo, ".agents", "skills");
+		const nestedSkills = join(cwd, ".agents", "skills");
+		mkdirSync(globalSkills, { recursive: true });
+		mkdirSync(repoSkills, { recursive: true });
+		mkdirSync(nestedSkills, { recursive: true });
+
+		assert.deepEqual(getCodexSkillPaths(cwd, home), [globalSkills, nestedSkills, repoSkills]);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
 });
