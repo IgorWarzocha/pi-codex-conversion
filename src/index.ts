@@ -1,4 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { existsSync } from "node:fs";
+import { homedir } from "node:os";
+import { join, resolve } from "node:path";
 import { getCodexRuntimeShell } from "./adapter/runtime-shell.ts";
 import {
 	CORE_ADAPTER_TOOL_NAMES,
@@ -20,7 +23,7 @@ import {
 	registerOpenAICodexCustomProvider,
 } from "./providers/openai-codex-custom-provider.ts";
 import { registerImageGenerationTool, rewriteNativeImageGenerationTool, supportsNativeImageGeneration } from "./tools/image-generation-tool.ts";
-import { buildCodexSystemPrompt, extractPiPromptSkills, type PromptSkill } from "./prompt/build-system-prompt.ts";
+import { buildCodexSystemPrompt, extractPiPromptSkills, resolvePromptSkills, type PromptSkill } from "./prompt/build-system-prompt.ts";
 import { registerViewImageTool, supportsOriginalImageDetail } from "./tools/view-image-tool.ts";
 import {
 	registerWebSearchTool,
@@ -83,6 +86,11 @@ export default function codexConversion(pi: ExtensionAPI) {
 		syncAdapter(pi, ctx, state);
 	});
 
+	pi.on("resources_discover", async (event) => {
+		const skillPaths = getCodexSkillPaths(event.cwd);
+		return skillPaths.length > 0 ? { skillPaths } : undefined;
+	});
+
 	pi.on("model_select", async (_event, ctx) => {
 		state.cwd = ctx.cwd;
 		syncAdapter(pi, ctx, state);
@@ -118,9 +126,10 @@ export default function codexConversion(pi: ExtensionAPI) {
 		if (!isCodexLikeContext(ctx)) {
 			return undefined;
 		}
+		const skills = resolvePromptSkills(event.systemPromptOptions?.skills, state.promptSkills);
 		return {
 			systemPrompt: buildCodexSystemPrompt(event.systemPrompt, {
-				skills: state.promptSkills,
+				skills,
 				shell: getCodexRuntimeShell(process.env.SHELL),
 			}),
 		};
@@ -147,6 +156,20 @@ export default function codexConversion(pi: ExtensionAPI) {
 			),
 		};
 	});
+}
+
+export function getCodexSkillPaths(cwd: string, home: string = homedir()): string[] {
+	const skillPaths = [join(home, ".agents", "skills")];
+	let currentDir = resolve(cwd);
+	while (true) {
+		skillPaths.push(join(currentDir, ".agents", "skills"));
+		const parentDir = resolve(currentDir, "..");
+		if (parentDir === currentDir) {
+			break;
+		}
+		currentDir = parentDir;
+	}
+	return skillPaths.filter((path) => existsSync(path));
 }
 
 function syncAdapter(pi: ExtensionAPI, ctx: ExtensionContext, state: AdapterState): void {
