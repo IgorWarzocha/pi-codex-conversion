@@ -56,9 +56,11 @@ interface PtyExecSession extends BaseExecSession {
 
 type ExecSession = PipeExecSession | PtyExecSession;
 
+export type ExecSessionUpdateCallback = (result: UnifiedExecResult) => void;
+
 export interface ExecSessionManager {
-	exec(input: ExecCommandInput, cwd: string, signal?: AbortSignal): Promise<UnifiedExecResult>;
-	write(input: WriteStdinInput): Promise<UnifiedExecResult>;
+	exec(input: ExecCommandInput, cwd: string, signal?: AbortSignal, onUpdate?: ExecSessionUpdateCallback): Promise<UnifiedExecResult>;
+	write(input: WriteStdinInput, onUpdate?: ExecSessionUpdateCallback): Promise<UnifiedExecResult>;
 	hasSession(sessionId: number): boolean;
 	getSessionCommand(sessionId: number): string | undefined;
 	onSessionExit(listener: (sessionId: number, command: string) => void): () => void;
@@ -311,10 +313,7 @@ function generateChunkId(): string {
 	return randomBytes(3).toString("hex");
 }
 
-function consumeOutput(session: ExecSession, maxOutputTokens?: number): { output: string; original_token_count?: number } {
-	const text =
-		session.kind === "pty" ? computePtyDelta(session.emittedBuffer, session.buffer) : session.buffer.slice(session.emittedBuffer.length);
-	session.emittedBuffer = session.buffer;
+function truncateOutput(text: string, maxOutputTokens?: number): { output: string; original_token_count?: number } {
 	if (text.length === 0) {
 		return { output: "" };
 	}
@@ -329,6 +328,24 @@ function consumeOutput(session: ExecSession, maxOutputTokens?: number): { output
 		output: text.slice(-maxChars),
 		original_token_count: originalTokenCount,
 	};
+}
+
+function consumeOutput(session: ExecSession, maxOutputTokens?: number): { output: string; original_token_count?: number } {
+	const text =
+		session.kind === "pty" ? computePtyDelta(session.emittedBuffer, session.buffer) : session.buffer.slice(session.emittedBuffer.length);
+	session.emittedBuffer = session.buffer;
+	return truncateOutput(text, maxOutputTokens);
+}
+
+function peekUnconsumedOutput(session: ExecSession, maxOutputTokens?: number): { output: string; original_token_count?: number } {
+	const text =
+		session.kind === "pty" ? computePtyDelta(session.emittedBuffer, session.buffer) : session.buffer.slice(session.emittedBuffer.length);
+	return truncateOutput(text, maxOutputTokens);
+}
+
+function peekOutputSince(session: ExecSession, baseline: string, maxOutputTokens?: number): { output: string; original_token_count?: number } {
+	const text = session.kind === "pty" ? computePtyDelta(baseline, session.buffer) : session.buffer.slice(baseline.length);
+	return truncateOutput(text, maxOutputTokens);
 }
 
 function registerAbortHandler(signal: AbortSignal | undefined, onAbort: () => void): () => void {
@@ -398,17 +415,31 @@ export function createExecSessionManager(options: ExecSessionManagerOptions = {}
 		notify(session);
 	}
 
-	function waitForExitOrTimeout(session: ExecSession, yieldTimeMs: number): Promise<number> {
+	function waitForExitOrTimeout(
+		session: ExecSession,
+		yieldTimeMs: number,
+		onUpdate?: (elapsedMs: number) => void,
+	): Promise<number> {
 		if (session.exitCode !== undefined && session.exitCode !== null) {
 			return Promise.resolve(0);
 		}
 
 		const startedAt = Date.now();
+		let updateTimer: ReturnType<typeof setInterval> | undefined;
+		let lastUpdateAt = 0;
 		return new Promise((resolvePromise) => {
+			const emitUpdate = (force = false) => {
+				const now = Date.now();
+				if (!force && now - lastUpdateAt < 250) return;
+				lastUpdateAt = now;
+				onUpdate?.(now - startedAt);
+			};
 			const onWake = () => {
 				if (session.exitCode === undefined || session.exitCode === null) {
+					emitUpdate();
 					return;
 				}
+				emitUpdate(true);
 				cleanup();
 				resolvePromise(Date.now() - startedAt);
 			};
@@ -416,8 +447,12 @@ export function createExecSessionManager(options: ExecSessionManagerOptions = {}
 				cleanup();
 				resolvePromise(Date.now() - startedAt);
 			}, yieldTimeMs);
+			if (onUpdate) {
+				updateTimer = setInterval(emitUpdate, 250);
+			}
 			const cleanup = () => {
 				clearTimeout(timeout);
+				if (updateTimer) clearInterval(updateTimer);
 				session.listeners.delete(onWake);
 			};
 			session.listeners.add(onWake);
@@ -441,6 +476,36 @@ export function createExecSessionManager(options: ExecSessionManagerOptions = {}
 			if (session.emittedBuffer === session.buffer) {
 				sessions.delete(session.id);
 			}
+		}
+		return result;
+	}
+
+	function makeSnapshotResult(session: ExecSession, waitMs: number, maxOutputTokens?: number, unconsumedOnly = false): UnifiedExecResult {
+		const snapshot = unconsumedOnly ? peekUnconsumedOutput(session, maxOutputTokens) : truncateOutput(session.buffer, maxOutputTokens);
+		return makeSnapshotFromOutput(session, waitMs, snapshot);
+	}
+
+	function makeSnapshotSince(session: ExecSession, waitMs: number, baseline: string, maxOutputTokens?: number): UnifiedExecResult {
+		return makeSnapshotFromOutput(session, waitMs, peekOutputSince(session, baseline, maxOutputTokens));
+	}
+
+	function makeSnapshotFromOutput(
+		session: ExecSession,
+		waitMs: number,
+		snapshot: { output: string; original_token_count?: number },
+	): UnifiedExecResult {
+		const result: UnifiedExecResult = {
+			chunk_id: generateChunkId(),
+			wall_time_seconds: waitMs / 1000,
+			output: snapshot.output,
+		};
+		if (snapshot.original_token_count !== undefined) {
+			result.original_token_count = snapshot.original_token_count;
+		}
+		if (session.exitCode === undefined || session.exitCode === null) {
+			result.session_id = session.id;
+		} else {
+			result.exit_code = session.exitCode;
 		}
 		return result;
 	}
@@ -537,7 +602,7 @@ export function createExecSessionManager(options: ExecSessionManagerOptions = {}
 	}
 
 	return {
-		exec: async (input, cwd, signal) => {
+		exec: async (input, cwd, signal, onUpdate) => {
 			const shell = resolveShell(input.shell);
 			const workdir = resolveWorkdir(cwd, input.workdir);
 			const session = input.tty
@@ -546,17 +611,20 @@ export function createExecSessionManager(options: ExecSessionManagerOptions = {}
 			sessions.set(session.id, session);
 			rememberCommand(session.id, session.command);
 
+			onUpdate?.(makeSnapshotResult(session, 0, input.max_output_tokens, true));
 			const waitedMs = await waitForExitOrTimeout(
 				session,
 				clampExecYieldTime(input.yield_time_ms, defaultExecYieldTimeMs, session.interactive, minNonInteractiveExecYieldTimeMs),
+				onUpdate ? (elapsedMs) => onUpdate(makeSnapshotResult(session, elapsedMs, input.max_output_tokens)) : undefined,
 			);
 			return makeResult(session, waitedMs, input.max_output_tokens);
 		},
-		write: async (input) => {
+		write: async (input, onUpdate) => {
 			const session = sessions.get(input.session_id);
 			if (!session) {
 				throw new Error(`Unknown process id ${input.session_id}`);
 			}
+			const updateBaseline = session.buffer;
 			if (input.chars && input.chars.length > 0) {
 				if (!session.interactive) {
 					throw new Error("stdin is closed for this session; rerun exec_command with tty=true to keep stdin open");
@@ -565,6 +633,7 @@ export function createExecSessionManager(options: ExecSessionManagerOptions = {}
 					session.child.write(input.chars);
 				}
 			}
+			onUpdate?.(makeSnapshotSince(session, 0, updateBaseline, input.max_output_tokens));
 			const waitedMs =
 				session.exitCode === undefined
 					? await waitForExitOrTimeout(
@@ -575,6 +644,7 @@ export function createExecSessionManager(options: ExecSessionManagerOptions = {}
 								!input.chars || input.chars.length === 0,
 								minEmptyWriteYieldTimeMs,
 							),
+							onUpdate ? (elapsedMs) => onUpdate(makeSnapshotSince(session, elapsedMs, updateBaseline, input.max_output_tokens)) : undefined,
 						)
 					: 0;
 			return makeResult(session, waitedMs, input.max_output_tokens);

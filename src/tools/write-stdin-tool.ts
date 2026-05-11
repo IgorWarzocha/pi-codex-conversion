@@ -111,12 +111,16 @@ export function registerWriteStdinTool(pi: ExtensionAPI, sessions: ExecSessionMa
 		description: "Writes to or polls a running exec session.",
 		promptSnippet: "Write to an exec session.",
 		parameters: WRITE_STDIN_PARAMETERS,
-		async execute(_toolCallId, params) {
+		async execute(_toolCallId, params, _signal, onUpdate) {
 			const typed = parseWriteStdinParams(params);
 			const command = sessions.getSessionCommand(typed.session_id);
 			let result: UnifiedExecResult;
 			try {
-				result = await sessions.write(typed);
+				const toToolResult = (partial: UnifiedExecResult) => ({
+					content: [{ type: "text" as const, text: formatUnifiedExecResult(partial, command) }],
+					details: partial,
+				});
+				result = await sessions.write(typed, onUpdate ? (partial) => onUpdate(toToolResult(partial)) : undefined);
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
 				throw new Error(`write_stdin failed: ${message}`);
@@ -133,7 +137,7 @@ export function registerWriteStdinTool(pi: ExtensionAPI, sessions: ExecSessionMa
 			return new Text(renderWriteStdinCall(sessionId, input, command, theme), 0, 0);
 		},
 		renderResult(result, { expanded, isPartial }, theme) {
-			if (isPartial || !expanded) return createEmptyResultComponent();
+			if (!expanded) return createEmptyResultComponent();
 			const state = getResultState(result);
 			const output = renderTerminalText(state.output);
 			let text = theme.fg("dim", output || "(no output)");
