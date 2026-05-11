@@ -110,7 +110,7 @@ const renderExecCommandResultWithOptionalContext: any = (
 	context: ExecCommandRenderContextLike | undefined,
 	tracker: ExecCommandTracker,
 ) => {
-	if (options.isPartial || !options.expanded) {
+	if (!options.expanded) {
 		return createEmptyResultComponent();
 	}
 
@@ -140,12 +140,16 @@ export function registerExecCommandTool(pi: ExtensionAPI, tracker: ExecCommandTr
 		promptSnippet: "Run a command.",
 		parameters: EXEC_COMMAND_PARAMETERS,
 		prepareArguments: prepareExecCommandArguments,
-		async execute(toolCallId, params, signal, _onUpdate, ctx) {
+		async execute(toolCallId, params, signal, onUpdate, ctx) {
 			if (signal?.aborted) {
 				throw new Error("exec_command aborted");
 			}
 			const typedParams = parseExecCommandParams(params);
-			const result = await sessions.exec(typedParams, ctx.cwd, signal);
+			const toToolResult = (partial: UnifiedExecResult) => ({
+				content: [{ type: "text" as const, text: formatUnifiedExecResult(partial, typedParams.cmd) }],
+				details: partial,
+			});
+			const result = await sessions.exec(typedParams, ctx.cwd, signal, onUpdate ? (partial) => onUpdate(toToolResult(partial)) : undefined);
 			if (result.session_id !== undefined) {
 				tracker.recordPersistentSession(toolCallId, result.session_id);
 			}

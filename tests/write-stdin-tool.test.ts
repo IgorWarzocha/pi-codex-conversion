@@ -86,7 +86,7 @@ test("write_stdin renderCall stays stable after the backing session exits", asyn
 	}
 });
 
-test("write_stdin renderResult returns an empty component for collapsed or partial states", () => {
+test("write_stdin renderResult returns an empty component when collapsed and renders partial output", () => {
 	const sessions = createFastTestExecSessionManager();
 	const { pi, getTool } = createRegisteredTool();
 	registerWriteStdinTool(pi, sessions);
@@ -98,7 +98,7 @@ test("write_stdin renderResult returns an empty component for collapsed or parti
 		};
 
 		assert.equal(renderComponentText(getTool().renderResult?.(result, { expanded: false, isPartial: false }, theme)), "");
-		assert.equal(renderComponentText(getTool().renderResult?.(result, { expanded: true, isPartial: true }, theme)), "");
+		assert.equal(renderComponentText(getTool().renderResult?.(result, { expanded: true, isPartial: true }, theme)), "ignored");
 	} finally {
 		sessions.shutdown();
 	}

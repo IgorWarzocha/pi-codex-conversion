@@ -78,7 +78,7 @@ test("exec_command prepareArguments preserves invalid optional field types for v
 	}
 });
 
-test("exec_command renderResult returns an empty component for collapsed or partial states", () => {
+test("exec_command renderResult returns an empty component when collapsed and renders partial output", () => {
 	const tracker = createExecCommandTracker();
 	const sessions = createExecSessionManager();
 	const { pi, getTool } = createRegisteredTool();
@@ -104,7 +104,7 @@ test("exec_command renderResult returns an empty component for collapsed or part
 			theme,
 		);
 		assert.ok(partial);
-		assert.deepEqual(partial.render(120), []);
+		assert.equal(trimRenderedLines(partial.render(120)), "ignored");
 	} finally {
 		sessions.shutdown();
 	}
