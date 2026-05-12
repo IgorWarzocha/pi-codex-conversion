@@ -79,3 +79,73 @@ test("renderGroupedExecCommandCall keeps distinct reads that share a basename", 
 
 	assert.equal(text, "• Explored\n  └ Read src/index.ts, tests/index.ts");
 });
+
+test("renderGroupedExecCommandCall annotates SKILL.md reads with the skill directory", () => {
+	const theme = createTheme();
+	const text = renderGroupedExecCommandCall(
+		[
+			[
+				{
+					kind: "read",
+					command: "cat /home/user/.pi/agent/skills/anti-ai-copy/SKILL.md",
+					name: "SKILL.md",
+					path: "/home/user/.pi/agent/skills/anti-ai-copy/SKILL.md",
+				},
+			],
+			[{ kind: "read", command: "cat AGENTS.md", name: "AGENTS.md", path: "AGENTS.md" }],
+		],
+		"done",
+		theme,
+	);
+
+	assert.equal(text, "• Explored\n  └ Read anti-ai-copy skill, AGENTS.md");
+});
+
+test("renderGroupedExecCommandCall preserves earlier reads when a coalesced batch ends with a skill", () => {
+	const theme = createTheme();
+	const text = renderGroupedExecCommandCall(
+		[
+			[{ kind: "read", command: "cat README.md", name: "README.md", path: "README.md" }],
+			[
+				{
+					kind: "read",
+					command: "cat /home/user/.pi/agent/skills/anti-ai-copy/SKILL.md",
+					name: "SKILL.md",
+					path: "/home/user/.pi/agent/skills/anti-ai-copy/SKILL.md",
+				},
+			],
+		],
+		"done",
+		theme,
+	);
+
+	assert.equal(text, "• Explored\n  └ Read README.md, anti-ai-copy skill");
+});
+
+test("renderGroupedExecCommandCall keeps multiple skill reads human-readable", () => {
+	const theme = createTheme();
+	const text = renderGroupedExecCommandCall(
+		[
+			[
+				{
+					kind: "read",
+					command: "cat /home/user/.pi/agent/skills/anti-ai-copy/SKILL.md",
+					name: "SKILL.md",
+					path: "/home/user/.pi/agent/skills/anti-ai-copy/SKILL.md",
+				},
+			],
+			[
+				{
+					kind: "read",
+					command: "cat /home/user/.pi/agent/skills/skill-creator/SKILL.md",
+					name: "SKILL.md",
+					path: "/home/user/.pi/agent/skills/skill-creator/SKILL.md",
+				},
+			],
+		],
+		"done",
+		theme,
+	);
+
+	assert.equal(text, "• Explored\n  └ Read anti-ai-copy skill, skill-creator skill");
+});

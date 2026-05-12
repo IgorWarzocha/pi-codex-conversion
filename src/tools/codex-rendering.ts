@@ -70,7 +70,7 @@ function formatCommandPreview(command: string | undefined): string | undefined {
 
 function formatActionLine(action: ShellAction): { title: string; body: string } {
 	if (action.kind === "read") {
-		return { title: "Read", body: action.name };
+		return { title: "Read", body: formatReadLabel(action) };
 	}
 	if (action.kind === "list") {
 		return { title: "List", body: action.path ?? action.command };
@@ -85,6 +85,19 @@ function formatActionLine(action: ShellAction): { title: string; body: string } 
 		return { title: "Search", body: action.command };
 	}
 	return { title: "Run", body: action.command };
+}
+
+function formatReadLabel(action: Extract<ShellAction, { kind: "read" }>): string {
+	const skillName = skillNameFromSkillPath(action.path);
+	return skillName ? `${skillName} skill` : action.name;
+}
+
+function skillNameFromSkillPath(path: string): string | undefined {
+	const normalized = path.replace(/\\/g, "/");
+	const parts = normalized.split("/").filter(Boolean);
+	if (parts.at(-1) !== "SKILL.md") return undefined;
+	const skillDir = parts.at(-2);
+	return skillDir && skillDir !== ".system" ? skillDir : undefined;
 }
 
 function coalesceReadGroups(actionGroups: ShellAction[][]): ShellAction[] {
@@ -115,21 +128,25 @@ function coalesceReadGroups(actionGroups: ShellAction[][]): ShellAction[] {
 			}
 
 			if (lastRead) {
-				const duplicateNames = new Set<string>();
-				const seenNames = new Set<string>();
+				const duplicateLabels = new Set<string>();
+				const seenLabels = new Set<string>();
 				for (const read of reads) {
-					if (seenNames.has(read.name)) {
-						duplicateNames.add(read.name);
+					const label = formatReadLabel(read);
+					if (seenLabels.has(label)) {
+						duplicateLabels.add(label);
 						continue;
 					}
-					seenNames.add(read.name);
+					seenLabels.add(label);
 				}
-				const labels = reads.map((read) => (duplicateNames.has(read.name) ? read.path : read.name));
+				const labels = reads.map((read) => {
+					const label = formatReadLabel(read);
+					return duplicateLabels.has(label) ? read.path : label;
+				});
 				flattened.push({
 					kind: "read",
 					command: labels.join(" && "),
 					name: labels.join(", "),
-					path: lastRead.path,
+					path: "",
 				});
 			}
 			continue;
