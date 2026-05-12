@@ -128,21 +128,25 @@ function coalesceReadGroups(actionGroups: ShellAction[][]): ShellAction[] {
 			}
 
 			if (lastRead) {
-				const duplicateNames = new Set<string>();
-				const seenNames = new Set<string>();
+				const duplicateLabels = new Set<string>();
+				const seenLabels = new Set<string>();
 				for (const read of reads) {
-					if (seenNames.has(read.name)) {
-						duplicateNames.add(read.name);
+					const label = formatReadLabel(read);
+					if (seenLabels.has(label)) {
+						duplicateLabels.add(label);
 						continue;
 					}
-					seenNames.add(read.name);
+					seenLabels.add(label);
 				}
-				const labels = reads.map((read) => (duplicateNames.has(read.name) ? read.path : formatReadLabel(read)));
+				const labels = reads.map((read) => {
+					const label = formatReadLabel(read);
+					return duplicateLabels.has(label) ? read.path : label;
+				});
 				flattened.push({
 					kind: "read",
 					command: labels.join(" && "),
 					name: labels.join(", "),
-					path: lastRead.path,
+					path: "",
 				});
 			}
 			continue;
