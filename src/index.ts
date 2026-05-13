@@ -37,11 +37,15 @@ import { ensureBundledApplyPatchOnPath } from "./tools/apply-patch-binary.ts";
 interface AdapterState {
 	enabled: boolean;
 	cwd: string;
+	fastModeEnabled: boolean;
 	previousToolNames?: string[];
 	promptSkills: PromptSkill[];
 }
 
 const ADAPTER_TOOL_NAMES = [...CORE_ADAPTER_TOOL_NAMES, WEB_SEARCH_TOOL_NAME, IMAGE_GENERATION_TOOL_NAME, VIEW_IMAGE_TOOL_NAME];
+const FAST_MODE_STATUS_KEY = "codex-fast";
+const FAST_MODE_STATUS_TEXT = "fast";
+const FAST_MODE_SERVICE_TIER = "priority";
 
 function getCommandArg(args: unknown): string | undefined {
 	if (!args || typeof args !== "object" || !("cmd" in args) || typeof args.cmd !== "string") {
@@ -63,7 +67,7 @@ function isToolCallOnlyAssistantMessage(message: unknown): boolean {
 export default function codexConversion(pi: ExtensionAPI) {
 	ensureBundledApplyPatchOnPath();
 	const tracker = createExecCommandTracker();
-	const state: AdapterState = { enabled: false, cwd: process.cwd(), promptSkills: [] };
+	const state: AdapterState = { enabled: false, cwd: process.cwd(), fastModeEnabled: false, promptSkills: [] };
 	const sessions = createExecSessionManager();
 
 	registerOpenAICodexCustomProvider(pi, {
@@ -74,6 +78,7 @@ export default function codexConversion(pi: ExtensionAPI) {
 	registerWriteStdinTool(pi, sessions);
 	registerImageGenerationTool(pi);
 	registerWebSearchTool(pi);
+	registerFastModeCommand(pi, state);
 
 	sessions.onSessionExit((sessionId) => {
 		tracker.recordSessionFinished(sessionId);
@@ -81,6 +86,7 @@ export default function codexConversion(pi: ExtensionAPI) {
 
 	pi.on("session_start", async (_event, ctx) => {
 		state.cwd = ctx.cwd;
+		state.fastModeEnabled = false;
 		clearApplyPatchRenderState();
 		tracker.clear();
 		syncAdapter(pi, ctx, state);
@@ -140,7 +146,8 @@ export default function codexConversion(pi: ExtensionAPI) {
 		if (!isOpenAICodexContext(ctx)) {
 			return undefined;
 		}
-		return rewriteNativeImageGenerationTool(rewriteNativeWebSearchTool(event.payload, ctx.model), ctx.model);
+		const rewrittenPayload = rewriteNativeImageGenerationTool(rewriteNativeWebSearchTool(event.payload, ctx.model), ctx.model);
+		return applyFastServiceTier(rewrittenPayload, state.fastModeEnabled);
 	});
 
 	pi.on("context", async (event) => {
@@ -156,6 +163,33 @@ export default function codexConversion(pi: ExtensionAPI) {
 			),
 		};
 	});
+}
+
+function registerFastModeCommand(pi: ExtensionAPI, state: AdapterState): void {
+	pi.registerCommand("fast", {
+		description: "Toggle Codex fast service tier",
+		handler: async (_args, ctx) => {
+			if (!isOpenAICodexContext(ctx)) {
+				if (ctx.hasUI) {
+					ctx.ui.notify("Fast mode is only available with the openai-codex provider", "warning");
+				}
+				return;
+			}
+
+			state.fastModeEnabled = !state.fastModeEnabled;
+			setFastStatus(ctx, state.fastModeEnabled);
+			if (ctx.hasUI) {
+				ctx.ui.notify(`Fast mode ${state.fastModeEnabled ? "enabled" : "disabled"}`, "info");
+			}
+		},
+	});
+}
+
+export function applyFastServiceTier(payload: unknown, enabled: boolean): unknown {
+	if (!enabled || !payload || typeof payload !== "object" || Array.isArray(payload)) {
+		return payload;
+	}
+	return { ...payload, service_tier: FAST_MODE_SERVICE_TIER };
 }
 
 export function getCodexSkillPaths(cwd: string, home: string = homedir()): string[] {
@@ -206,12 +240,19 @@ function disableAdapter(pi: ExtensionAPI, ctx: ExtensionContext, state: AdapterS
 	if (state.enabled) {
 		state.enabled = false;
 	}
+	state.fastModeEnabled = false;
 	setStatus(ctx, false);
+	setFastStatus(ctx, false);
 }
 
 function setStatus(ctx: ExtensionContext, enabled: boolean): void {
 	if (!ctx.hasUI) return;
 	ctx.ui.setStatus(STATUS_KEY, enabled ? STATUS_TEXT : undefined);
+}
+
+function setFastStatus(ctx: ExtensionContext, enabled: boolean): void {
+	if (!ctx.hasUI) return;
+	ctx.ui.setStatus(FAST_MODE_STATUS_KEY, enabled ? FAST_MODE_STATUS_TEXT : undefined);
 }
 
 function getAdapterToolNames(ctx: ExtensionContext): string[] {
