@@ -516,7 +516,12 @@ function resolveCodexServiceTier(responseServiceTier: ServiceTier, requestServic
 	return responseServiceTier ?? requestServiceTier;
 }
 
-export function buildRequestBody<TApi extends Api>(model: Model<TApi>, context: Context, options?: SimpleStreamOptions): ResponsesBody {
+export function buildRequestBody<TApi extends Api>(
+	model: Model<TApi>,
+	context: Context,
+	options?: SimpleStreamOptions,
+	deps: { nativeWebSearchEnabled?: boolean } = {},
+): ResponsesBody {
 	const messages = convertResponsesMessages(model, context, CODEX_TOOL_CALL_PROVIDERS, {
 		includeSystemPrompt: false,
 	});
@@ -551,7 +556,7 @@ export function buildRequestBody<TApi extends Api>(model: Model<TApi>, context: 
 	if (context.tools && context.tools.length > 0) {
 		body.tools = convertResponsesTools(context.tools, { strict: null });
 		const hasWebSearchTool = context.tools.some((tool) => tool.name === "web_search");
-		if (hasWebSearchTool) {
+		if (deps.nativeWebSearchEnabled !== false && hasWebSearchTool) {
 			body.include.push("web_search_call.action.sources", "web_search_call.results");
 		}
 	}
@@ -1472,6 +1477,7 @@ function createCodexStream<TApi extends Api>(
 	options: SimpleStreamOptions | undefined,
 	deps: {
 		getCurrentCwd: () => string;
+		nativeWebSearchEnabled?: boolean;
 		onImageSaved?: (savedImage: SavedGeneratedImage, imageData: { data: string; mimeType: string }) => void;
 		onWebSearchCaptured?: (search: SurfacedWebSearch) => void;
 	},
@@ -1490,7 +1496,7 @@ function createCodexStream<TApi extends Api>(
 			}
 
 			const accountId = extractAccountId(apiKey);
-			let body = buildRequestBody(model, context, options);
+			let body = buildRequestBody(model, context, options, { nativeWebSearchEnabled: deps.nativeWebSearchEnabled });
 			const nextBody = await options?.onPayload?.(body, model);
 			if (nextBody !== undefined) {
 				body = nextBody as ResponsesBody;
@@ -1626,7 +1632,7 @@ function createCodexStream<TApi extends Api>(
 	return stream;
 }
 
-export function registerOpenAICodexCustomProvider(pi: ExtensionAPI, options: { getCurrentCwd: () => string }): void {
+export function registerOpenAICodexCustomProvider(pi: ExtensionAPI, options: { getCurrentCwd: () => string; nativeWebSearchEnabled?: boolean }): void {
 	const pendingActivities: PendingActivity[] = [];
 	const imagePreviewCache = new Map<string, CachedImagePreview>();
 	let pendingFlushTimer: ReturnType<typeof setTimeout> | undefined;
@@ -1688,6 +1694,7 @@ export function registerOpenAICodexCustomProvider(pi: ExtensionAPI, options: { g
 		streamSimple: (model, context, streamOptions) =>
 			createCodexStream(model, context, streamOptions, {
 				getCurrentCwd: options.getCurrentCwd,
+				nativeWebSearchEnabled: options.nativeWebSearchEnabled,
 				onImageSaved: (savedImage, imageData) => {
 					pendingActivities.push({ kind: "image", savedImage, imageData });
 				},

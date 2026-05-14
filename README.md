@@ -72,6 +72,16 @@ Raw command output is still available by expanding the tool result.
 - Shell `apply_patch` is also available inside `exec_command`, but the dedicated `apply_patch` tool is preferred unless you are chaining edits with other shell steps.
 - Native `web_search` and `image_generation` are forwarded to OpenAI Codex Responses tools rather than executed as local function tools.
 
+## Coexisting with other web search extensions
+
+This extension registers a `web_search` adapter tool by default. If you use another Pi extension that owns the same tool name, such as `pi-web-access`, disable this extension's native Codex web search bridge before starting Pi:
+
+```bash
+PI_CODEX_CONVERSION_NATIVE_WEB_SEARCH=0 pi
+```
+
+Accepted disabled values are `0`, `false`, `off`, and `no`. With native web search disabled, this extension still registers the shell, patch, image generation, and image viewing tools, while leaving any externally provided `web_search` tool active.
+
 ## License
 
 MIT

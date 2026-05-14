@@ -64,6 +64,18 @@ test("rewriteNativeWebSearchTool leaves other providers untouched", () => {
 	);
 });
 
+test("rewriteNativeWebSearchTool leaves web_search function tools untouched when native web search is disabled", () => {
+	const payload = {
+		model: "gpt-5.4",
+		tools: [{ type: "function", name: "web_search", parameters: { type: "object" } }],
+	};
+
+	assert.equal(
+		rewriteNativeWebSearchTool(payload, { provider: "openai-codex", api: "openai-codex-responses", id: "gpt-5.4" } as never, false),
+		payload,
+	);
+});
+
 test("supportsMultimodalNativeWebSearch excludes spark", () => {
 	assert.equal(
 		supportsMultimodalNativeWebSearch(

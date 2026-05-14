@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { getCodexRuntimeShell } from "./adapter/runtime-shell.ts";
+import { isNativeWebSearchEnabled } from "./adapter/native-web-search-config.ts";
 import {
 	CORE_ADAPTER_TOOL_NAMES,
 	DEFAULT_TOOL_NAMES,
@@ -65,15 +66,19 @@ export default function codexConversion(pi: ExtensionAPI) {
 	const tracker = createExecCommandTracker();
 	const state: AdapterState = { enabled: false, cwd: process.cwd(), promptSkills: [] };
 	const sessions = createExecSessionManager();
+	const nativeWebSearchEnabled = isNativeWebSearchEnabled();
 
 	registerOpenAICodexCustomProvider(pi, {
 		getCurrentCwd: () => state.cwd,
+		nativeWebSearchEnabled,
 	});
 	registerApplyPatchTool(pi);
 	registerExecCommandTool(pi, tracker, sessions);
 	registerWriteStdinTool(pi, sessions);
 	registerImageGenerationTool(pi);
-	registerWebSearchTool(pi);
+	if (nativeWebSearchEnabled) {
+		registerWebSearchTool(pi);
+	}
 
 	sessions.onSessionExit((sessionId) => {
 		tracker.recordSessionFinished(sessionId);
@@ -140,7 +145,7 @@ export default function codexConversion(pi: ExtensionAPI) {
 		if (!isOpenAICodexContext(ctx)) {
 			return undefined;
 		}
-		return rewriteNativeImageGenerationTool(rewriteNativeWebSearchTool(event.payload, ctx.model), ctx.model);
+		return rewriteNativeImageGenerationTool(rewriteNativeWebSearchTool(event.payload, ctx.model, nativeWebSearchEnabled), ctx.model);
 	});
 
 	pi.on("context", async (event) => {
@@ -185,12 +190,14 @@ function syncAdapter(pi: ExtensionAPI, ctx: ExtensionContext, state: AdapterStat
 }
 
 function enableAdapter(pi: ExtensionAPI, ctx: ExtensionContext, state: AdapterState): void {
-	const toolNames = mergeAdapterTools(pi.getActiveTools(), getAdapterToolNames(ctx));
+	const adapterToolNames = getAdapterToolNames(ctx);
+	const adapterOwnedToolNames = getAdapterOwnedToolNames();
+	const toolNames = mergeAdapterTools(pi.getActiveTools(), adapterToolNames, adapterOwnedToolNames);
 	if (!state.enabled) {
 		// Preserve the previous active set once so switching away from Codex-like
 		// models restores the user's existing Pi tool configuration. Strip adapter
 		// tools in case a fresh session starts from persisted/mixed active tools.
-		state.previousToolNames = stripAdapterTools(pi.getActiveTools());
+		state.previousToolNames = stripAdapterTools(pi.getActiveTools(), adapterOwnedToolNames);
 		state.enabled = true;
 	}
 	pi.setActiveTools(toolNames);
@@ -199,8 +206,9 @@ function enableAdapter(pi: ExtensionAPI, ctx: ExtensionContext, state: AdapterSt
 
 function disableAdapter(pi: ExtensionAPI, ctx: ExtensionContext, state: AdapterState): void {
 	const previousToolNames = state.previousToolNames && state.previousToolNames.length > 0 ? state.previousToolNames : DEFAULT_TOOL_NAMES;
-	const restoredTools = restoreTools(previousToolNames, pi.getActiveTools());
-	if (state.enabled || hasAdapterTools(pi.getActiveTools())) {
+	const adapterOwnedToolNames = getAdapterOwnedToolNames();
+	const restoredTools = restoreTools(previousToolNames, pi.getActiveTools(), adapterOwnedToolNames);
+	if (state.enabled || hasAdapterTools(pi.getActiveTools(), adapterOwnedToolNames)) {
 		pi.setActiveTools(restoredTools);
 	}
 	if (state.enabled) {
@@ -216,7 +224,7 @@ function setStatus(ctx: ExtensionContext, enabled: boolean): void {
 
 function getAdapterToolNames(ctx: ExtensionContext): string[] {
 	const toolNames = [...CORE_ADAPTER_TOOL_NAMES];
-	if (supportsNativeWebSearch(ctx.model)) {
+	if (isNativeWebSearchEnabled() && supportsNativeWebSearch(ctx.model)) {
 		toolNames.push(WEB_SEARCH_TOOL_NAME);
 	}
 	if (supportsNativeImageGeneration(ctx.model)) {
@@ -228,25 +236,32 @@ function getAdapterToolNames(ctx: ExtensionContext): string[] {
 	return toolNames;
 }
 
-export function mergeAdapterTools(activeTools: string[], adapterTools: string[]): string[] {
-	const preservedTools = activeTools.filter((toolName) => !DEFAULT_TOOL_NAMES.includes(toolName) && !ADAPTER_TOOL_NAMES.includes(toolName));
+function getAdapterOwnedToolNames(): string[] {
+	if (isNativeWebSearchEnabled()) {
+		return ADAPTER_TOOL_NAMES;
+	}
+	return ADAPTER_TOOL_NAMES.filter((toolName) => toolName !== WEB_SEARCH_TOOL_NAME);
+}
+
+export function mergeAdapterTools(activeTools: string[], adapterTools: string[], adapterOwnedTools: string[] = ADAPTER_TOOL_NAMES): string[] {
+	const preservedTools = activeTools.filter((toolName) => !DEFAULT_TOOL_NAMES.includes(toolName) && !adapterOwnedTools.includes(toolName));
 	return [...adapterTools, ...preservedTools];
 }
 
-export function restoreTools(previousTools: string[], activeTools: string[]): string[] {
-	const restored = stripAdapterTools(previousTools);
+export function restoreTools(previousTools: string[], activeTools: string[], adapterOwnedTools: string[] = ADAPTER_TOOL_NAMES): string[] {
+	const restored = stripAdapterTools(previousTools, adapterOwnedTools);
 	for (const toolName of activeTools) {
-		if (!ADAPTER_TOOL_NAMES.includes(toolName) && !restored.includes(toolName)) {
+		if (!adapterOwnedTools.includes(toolName) && !restored.includes(toolName)) {
 			restored.push(toolName);
 		}
 	}
 	return restored;
 }
 
-export function stripAdapterTools(toolNames: string[]): string[] {
-	return toolNames.filter((toolName) => !ADAPTER_TOOL_NAMES.includes(toolName));
+export function stripAdapterTools(toolNames: string[], adapterOwnedTools: string[] = ADAPTER_TOOL_NAMES): string[] {
+	return toolNames.filter((toolName) => !adapterOwnedTools.includes(toolName));
 }
 
-function hasAdapterTools(activeTools: string[]): boolean {
-	return activeTools.some((toolName) => ADAPTER_TOOL_NAMES.includes(toolName));
+function hasAdapterTools(activeTools: string[], adapterOwnedTools: string[]): boolean {
+	return activeTools.some((toolName) => adapterOwnedTools.includes(toolName));
 }

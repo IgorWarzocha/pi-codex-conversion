@@ -36,6 +36,21 @@ test("buildRequestBody preserves provided system prompts", () => {
 	assert.equal(body.instructions, "Custom instructions");
 });
 
+test("buildRequestBody omits native web_search include entries when native web search is disabled", () => {
+	const body = buildRequestBody(
+		codexModel,
+		{
+			systemPrompt: "",
+			messages: [],
+			tools: [{ name: "web_search", description: "external web search", parameters: { type: "object" } }],
+		} as never,
+		undefined,
+		{ nativeWebSearchEnabled: false },
+	);
+
+	assert.deepEqual(body.include, ["reasoning.encrypted_content"]);
+});
+
 test("buildProviderErrorMessage marks websocket failures as Pi retryable connection errors", () => {
 	assert.equal(buildProviderErrorMessage(new Error("WebSocket error")), "Connection error: WebSocket error");
 	assert.equal(buildProviderErrorMessage(new Error("WebSocket closed 1000")), "Connection error: WebSocket closed 1000");

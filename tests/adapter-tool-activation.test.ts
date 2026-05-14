@@ -43,6 +43,27 @@ test("stripAdapterTools removes every adapter-owned tool", () => {
 	);
 });
 
+test("stripAdapterTools can preserve web_search when native web search is not adapter-owned", () => {
+	assert.deepEqual(
+		stripAdapterTools(
+			["read", "exec_command", "write_stdin", "apply_patch", "web_search", "image_generation", "view_image", "parallel"],
+			["exec_command", "write_stdin", "apply_patch", "image_generation", "view_image"],
+		),
+		["read", "web_search", "parallel"],
+	);
+});
+
+test("mergeAdapterTools preserves external web_search when native web search is disabled", () => {
+	assert.deepEqual(
+		mergeAdapterTools(
+			["read", "bash", "edit", "write", "web_search", "parallel"],
+			["exec_command", "write_stdin", "apply_patch"],
+			["exec_command", "write_stdin", "apply_patch", "image_generation", "view_image"],
+		),
+		["exec_command", "write_stdin", "apply_patch", "web_search", "parallel"],
+	);
+});
+
 test("getCodexSkillPaths discovers existing global and ancestor project Codex skill directories", () => {
 	const root = mkdtempSync(join(tmpdir(), "pi-codex-skills-"));
 	try {
