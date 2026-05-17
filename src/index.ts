@@ -140,7 +140,7 @@ export default function codexConversion(pi: ExtensionAPI) {
 	});
 
 	pi.on("before_agent_start", async (event, ctx) => {
-		if (!isCodexLikeContext(ctx)) {
+		if (!shouldUseCodexAdapter(ctx, state.config)) {
 			return undefined;
 		}
 		const skills = resolvePromptSkills(event.systemPromptOptions?.skills, state.promptSkills);
@@ -203,7 +203,7 @@ function registerCodexCommand(pi: ExtensionAPI, state: AdapterState): void {
 	pi.registerCommand("codex", {
 		description: "Configure Codex adapter settings",
 		getArgumentCompletions: (prefix) =>
-			["fast", "search", "image", "low", "medium", "high"]
+			["all", "fast", "search", "image", "low", "medium", "high"]
 				.filter((item) => item.startsWith(prefix.trim().toLowerCase()))
 				.map((value) => ({ label: value, value })),
 		handler: async (args, ctx) => {
@@ -214,6 +214,13 @@ function registerCodexCommand(pi: ExtensionAPI, state: AdapterState): void {
 				const nextConfig = { ...state.config, fast: !state.config.fast };
 				saveAndApply(ctx, nextConfig);
 				ctx.ui.notify(`Codex fast mode ${nextConfig.fast ? "enabled" : "disabled"}`, "info");
+				return;
+			}
+
+			if (arg === "all") {
+				const nextConfig = { ...state.config, useOnAllModels: !state.config.useOnAllModels };
+				saveAndApply(ctx, nextConfig);
+				ctx.ui.notify(`Codex adapter on all models ${nextConfig.useOnAllModels ? "enabled" : "disabled"}`, "info");
 				return;
 			}
 
@@ -240,18 +247,19 @@ function registerCodexCommand(pi: ExtensionAPI, state: AdapterState): void {
 			}
 
 			if (arg) {
-				ctx.ui.notify("Usage: /codex, /codex fast, /codex search, /codex image, /codex low|medium|high", "warning");
+				ctx.ui.notify("Usage: /codex, /codex all, /codex fast, /codex search, /codex image, /codex low|medium|high", "warning");
 				return;
 			}
 
 			if (!ctx.hasUI) {
-				ctx.ui.notify(`Codex settings: fast ${state.config.fast ? "on" : "off"}, web search ${state.config.webSearch ? "on" : "off"}, image generation ${state.config.imageGeneration ? "on" : "off"}, verbosity ${state.config.verbosity}`, "info");
+				ctx.ui.notify(`Codex settings: all models ${state.config.useOnAllModels ? "on" : "off"}, fast ${state.config.fast ? "on" : "off"}, web search ${state.config.webSearch ? "on" : "off"}, image generation ${state.config.imageGeneration ? "on" : "off"}, verbosity ${state.config.verbosity}`, "info");
 				return;
 			}
 
 			let draft = { ...state.config };
 			await ctx.ui.custom<void>((tui, theme, _kb, done) => {
 				const buildItems = (): SettingItem[] => [
+					{ id: "useOnAllModels", label: "Use on all models", currentValue: draft.useOnAllModels ? "on" : "off", values: ["off", "on"] },
 					{ id: "fast", label: "Fast mode", currentValue: draft.fast ? "on" : "off", values: ["off", "on"] },
 					{ id: "webSearch", label: "Web search", currentValue: draft.webSearch ? "on" : "off", values: ["off", "on"] },
 					{ id: "imageGeneration", label: "Image generation", currentValue: draft.imageGeneration ? "on" : "off", values: ["off", "on"] },
@@ -262,7 +270,8 @@ function registerCodexCommand(pi: ExtensionAPI, state: AdapterState): void {
 				const panel = new Box(1, 0);
 				panel.addChild(new DynamicBorder((text) => theme.fg("accent", text)));
 				let settingsList: SettingsList;
-				settingsList = new SettingsList(buildItems(), 5, getSettingsListTheme(), (id, value) => {
+				settingsList = new SettingsList(buildItems(), 6, getSettingsListTheme(), (id, value) => {
+					if (id === "useOnAllModels") draft.useOnAllModels = value === "on";
 					if (id === "fast") draft.fast = value === "on";
 					if (id === "webSearch") draft.webSearch = value === "on";
 					if (id === "imageGeneration") draft.imageGeneration = value === "on";
@@ -327,7 +336,7 @@ function syncAdapter(pi: ExtensionAPI, ctx: ExtensionContext, state: AdapterStat
 
 	registerViewImageTool(pi, { allowOriginalDetail: supportsOriginalImageDetail(ctx.model) });
 
-	if (isCodexLikeContext(ctx)) {
+	if (shouldUseCodexAdapter(ctx, state.config)) {
 		enableAdapter(pi, ctx, state);
 	} else {
 		disableAdapter(pi, ctx, state);
@@ -347,6 +356,10 @@ function enableAdapter(pi: ExtensionAPI, ctx: ExtensionContext, state: AdapterSt
 	setStatus(ctx, true, state.config);
 }
 
+function shouldUseCodexAdapter(ctx: ExtensionContext, config: CodexConversionConfig): boolean {
+	return config.useOnAllModels || isCodexLikeContext(ctx);
+}
+
 function disableAdapter(pi: ExtensionAPI, ctx: ExtensionContext, state: AdapterState): void {
 	const previousToolNames = state.previousToolNames && state.previousToolNames.length > 0 ? state.previousToolNames : DEFAULT_TOOL_NAMES;
 	const restoredTools = restoreTools(previousToolNames, pi.getActiveTools());
@@ -361,7 +374,16 @@ function disableAdapter(pi: ExtensionAPI, ctx: ExtensionContext, state: AdapterS
 
 function setStatus(ctx: ExtensionContext, enabled: boolean, config: CodexConversionConfig): void {
 	if (!ctx.hasUI) return;
-	ctx.ui.setStatus(STATUS_KEY, enabled ? buildStatusText(config) : undefined);
+	ctx.ui.setStatus(
+		STATUS_KEY,
+		enabled
+			? buildStatusText(
+					isOpenAICodexContext(ctx)
+						? config
+						: { useOnAllModels: config.useOnAllModels, fast: false, webSearch: false, imageGeneration: false },
+				)
+			: undefined,
+	);
 }
 
 function getAdapterToolNames(ctx: ExtensionContext, config: CodexConversionConfig): string[] {

@@ -48,7 +48,8 @@ Notably:
 ## What changes in Pi
 
 - Adapter mode activates automatically for OpenAI `gpt*` and `codex*` models, then restores the previous tool set when you switch away.
-- `/codex` opens adapter settings. `/codex fast` toggles priority service tier, `/codex search` toggles native web search, `/codex image` toggles image generation, and `/codex low|medium|high` sets Responses verbosity.
+- `/codex` opens adapter settings. `/codex all` toggles the Codex tool/prompt adapter for every model, `/codex fast` toggles priority service tier, `/codex search` toggles native web search, `/codex image` toggles image generation, and `/codex low|medium|high` sets Responses verbosity.
+- On non-Codex providers, `/codex all` uses the Codex shell/patch tools and prompt/skills enhancements while leaving provider-specific features such as verbosity, native web search, image generation, and service tier on Pi's standard provider path.
 - Settings are saved globally in `~/.pi/agent/pi-codex-conversion.json`.
 - The footer status shows the active verbosity and enabled extras, for example `Codex adapter V: low • web search • image gen`.
 - Pi's composed prompt is preserved; the extension only adds a small Codex-style tool-use nudge.

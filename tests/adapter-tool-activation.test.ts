@@ -47,18 +47,22 @@ test("stripAdapterTools removes every adapter-owned tool", () => {
 
 test("buildStatusText includes verbosity plus enabled web search and fast flags", () => {
 	assert.equal(
-		buildStatusText({ verbosity: "medium", webSearch: true, imageGeneration: true, fast: true }),
-		"\u001b[38;2;0;76;255mCodex adapter\u001b[0m V: mid • web search • image gen • fast",
+		buildStatusText({ verbosity: "medium", webSearch: true, imageGeneration: true, fast: true, useOnAllModels: true }),
+		"\u001b[38;2;0;76;255mCodex adapter\u001b[0m V: mid • all models • web search • image gen • fast",
 	);
 	assert.equal(
-		buildStatusText({ verbosity: "low", webSearch: false, imageGeneration: false, fast: false }),
+		buildStatusText({ verbosity: "low", webSearch: false, imageGeneration: false, fast: false, useOnAllModels: false }),
 		"\u001b[38;2;0;76;255mCodex adapter\u001b[0m V: low",
+	);
+	assert.equal(
+		buildStatusText({ webSearch: false, imageGeneration: false, fast: false, useOnAllModels: true }),
+		"\u001b[38;2;0;76;255mCodex adapter\u001b[0m • all models",
 	);
 });
 
 test("applyCodexRequestParams patches verbosity and priority service tier", () => {
 	assert.deepEqual(
-		applyCodexRequestParams({ input: "hello", text: { format: { type: "text" } } }, { fast: true, imageGeneration: true, webSearch: true, verbosity: "high" }),
+		applyCodexRequestParams({ input: "hello", text: { format: { type: "text" } } }, { fast: true, imageGeneration: true, useOnAllModels: false, webSearch: true, verbosity: "high" }),
 		{
 			input: "hello",
 			service_tier: "priority",
