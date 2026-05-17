@@ -155,7 +155,7 @@ export default function codexConversion(pi: ExtensionAPI) {
 
 	pi.on("before_provider_request", async (event, ctx) => {
 		state.cwd = ctx.cwd;
-		if (!isOpenAICodexContext(ctx) && !isResponsesContext(ctx)) {
+		if (!shouldUseCodexAdapter(ctx, state.config) || (!isOpenAICodexContext(ctx) && !isResponsesContext(ctx))) {
 			return undefined;
 		}
 		const isOpenAICodex = isOpenAICodexContext(ctx);
@@ -199,10 +199,15 @@ export function getCodexSkillPaths(cwd: string, home: string = homedir()): strin
 }
 
 function registerCodexCommand(pi: ExtensionAPI, state: AdapterState): void {
-	function saveAndApply(ctx: ExtensionContext, nextConfig: CodexConversionConfig): void {
+	function saveAndApply(ctx: ExtensionContext, nextConfig: CodexConversionConfig): boolean {
+		const writeResult = writeCodexConversionConfig(nextConfig);
+		if (!writeResult.ok) {
+			ctx.ui.notify(`Failed to save Codex settings: ${writeResult.error}`, "error");
+			return false;
+		}
 		state.config = nextConfig;
-		writeCodexConversionConfig(nextConfig);
 		syncAdapter(pi, ctx, state);
+		return true;
 	}
 
 	pi.registerCommand("codex", {
@@ -217,37 +222,32 @@ function registerCodexCommand(pi: ExtensionAPI, state: AdapterState): void {
 
 			if (arg === "fast") {
 				const nextConfig = { ...state.config, fast: !state.config.fast };
-				saveAndApply(ctx, nextConfig);
-				ctx.ui.notify(`Codex fast mode ${nextConfig.fast ? "enabled" : "disabled"}`, "info");
+				if (!saveAndApply(ctx, nextConfig)) return;
 				return;
 			}
 
 			if (arg === "all") {
 				const nextConfig = { ...state.config, useOnAllModels: !state.config.useOnAllModels };
-				saveAndApply(ctx, nextConfig);
-				ctx.ui.notify(`Codex adapter on all models ${nextConfig.useOnAllModels ? "enabled" : "disabled"}`, "info");
+				if (!saveAndApply(ctx, nextConfig)) return;
 				return;
 			}
 
 			if (arg === "search") {
 				const nextConfig = { ...state.config, webSearch: !state.config.webSearch };
-				saveAndApply(ctx, nextConfig);
-				ctx.ui.notify(`Codex web search ${nextConfig.webSearch ? "enabled" : "disabled"}`, "info");
+				if (!saveAndApply(ctx, nextConfig)) return;
 				return;
 			}
 
 			if (arg === "image") {
 				const nextConfig = { ...state.config, imageGeneration: !state.config.imageGeneration };
-				saveAndApply(ctx, nextConfig);
-				ctx.ui.notify(`Codex image generation ${nextConfig.imageGeneration ? "enabled" : "disabled"}`, "info");
+				if (!saveAndApply(ctx, nextConfig)) return;
 				return;
 			}
 
 			const verbosity = normalizeCodexVerbosity(arg);
 			if (verbosity) {
 				const nextConfig = { ...state.config, verbosity };
-				saveAndApply(ctx, nextConfig);
-				ctx.ui.notify(`Codex verbosity set to ${verbosity}`, "info");
+				if (!saveAndApply(ctx, nextConfig)) return;
 				return;
 			}
 
@@ -339,6 +339,9 @@ function openExternalUrl(url: string): void {
 	const command = process.platform === "darwin" ? "open" : process.platform === "win32" ? "cmd" : "xdg-open";
 	const args = process.platform === "win32" ? ["/c", "start", "", url] : [url];
 	const child = spawn(command, args, { detached: true, stdio: "ignore" });
+	child.on("error", (error) => {
+		console.warn(`[pi-codex-conversion] Failed to open ${url}: ${error.message}`);
+	});
 	child.unref();
 }
 
@@ -385,18 +388,20 @@ function disableAdapter(pi: ExtensionAPI, ctx: ExtensionContext, state: AdapterS
 
 function setStatus(ctx: ExtensionContext, enabled: boolean, config: CodexConversionConfig): void {
 	if (!ctx.hasUI) return;
-	ctx.ui.setStatus(
-		STATUS_KEY,
-		enabled
-			? buildStatusText(
-					isOpenAICodexContext(ctx)
-						? config
-						: isResponsesContext(ctx)
-							? { useOnAllModels: config.useOnAllModels, fast: false, webSearch: false, imageGeneration: false, verbosity: config.verbosity }
-							: { useOnAllModels: config.useOnAllModels, fast: false, webSearch: false, imageGeneration: false },
-				)
-			: undefined,
-	);
+	const statusConfig = getStatusConfig(ctx, config);
+	ctx.ui.setStatus(STATUS_KEY, enabled ? buildStatusText(statusConfig) : undefined);
+}
+
+function getStatusConfig(ctx: ExtensionContext, config: CodexConversionConfig): Parameters<typeof buildStatusText>[0] {
+	const showOpenAICodexFlags = isOpenAICodexContext(ctx);
+	const showResponsesVerbosity = isResponsesContext(ctx);
+	return {
+		useOnAllModels: config.useOnAllModels,
+		fast: showOpenAICodexFlags && config.fast,
+		webSearch: showOpenAICodexFlags && config.webSearch && supportsNativeWebSearch(ctx.model),
+		imageGeneration: showOpenAICodexFlags && config.imageGeneration && supportsNativeImageGeneration(ctx.model),
+		...(showResponsesVerbosity ? { verbosity: config.verbosity } : {}),
+	};
 }
 
 function getAdapterToolNames(ctx: ExtensionContext, config: CodexConversionConfig): string[] {

@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
 export type CodexVerbosity = "low" | "medium" | "high";
 
@@ -31,8 +31,8 @@ export function normalizeCodexVerbosity(value: unknown): CodexVerbosity | undefi
 	return normalized === "low" || normalized === "medium" || normalized === "high" ? normalized : undefined;
 }
 
-export function getCodexConversionConfigPath(home: string = homedir()): string {
-	return join(home, ".pi", "agent", CODEX_CONVERSION_CONFIG_BASENAME);
+export function getCodexConversionConfigPath(agentDir: string = getAgentDir()): string {
+	return join(agentDir, CODEX_CONVERSION_CONFIG_BASENAME);
 }
 
 export function readCodexConversionConfig(configPath: string = getCodexConversionConfigPath()): CodexConversionConfig {
@@ -61,13 +61,15 @@ export function readCodexConversionConfig(configPath: string = getCodexConversio
 export function writeCodexConversionConfig(
 	config: CodexConversionConfig,
 	configPath: string = getCodexConversionConfigPath(),
-): void {
+): { ok: true } | { ok: false; error: string } {
 	try {
 		mkdirSync(dirname(configPath), { recursive: true });
 		writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf-8");
+		return { ok: true };
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		console.warn(`[pi-codex-conversion] Failed to write ${configPath}: ${message}`);
+		return { ok: false, error: message };
 	}
 }
 

@@ -1,9 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { applyCodexRequestParams } from "../src/adapter/config.ts";
+import { applyCodexRequestParams, getCodexConversionConfigPath, writeCodexConversionConfig } from "../src/adapter/config.ts";
 import { buildStatusText } from "../src/adapter/tool-set.ts";
 import { getCodexSkillPaths, mergeAdapterTools, restoreTools, stripAdapterTools } from "../src/index.ts";
 
@@ -80,6 +80,40 @@ test("applyCodexRequestParams can apply verbosity without priority service tier"
 		),
 		{ input: "hello", text: { verbosity: "medium" } },
 	);
+});
+
+test("codex config path is rooted in Pi's agent directory", () => {
+	assert.equal(getCodexConversionConfigPath("/tmp/custom-agent"), join("/tmp/custom-agent", "pi-codex-conversion.json"));
+});
+
+test("writeCodexConversionConfig reports write failures", () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-codex-config-"));
+	try {
+		const blockedPath = join(root, "blocked");
+		writeFileSync(blockedPath, "not a directory");
+		const result = writeCodexConversionConfig(
+			{ fast: false, imageGeneration: true, useOnAllModels: false, webSearch: true, verbosity: "low" },
+			join(blockedPath, "pi-codex-conversion.json"),
+		);
+		assert.equal(result.ok, false);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("writeCodexConversionConfig reports successful writes", () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-codex-config-"));
+	try {
+		const configPath = join(root, "pi-codex-conversion.json");
+		const result = writeCodexConversionConfig(
+			{ fast: true, imageGeneration: false, useOnAllModels: true, webSearch: false, verbosity: "high" },
+			configPath,
+		);
+		assert.equal(result.ok, true);
+		assert.match(readFileSync(configPath, "utf8"), /"useOnAllModels": true/);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
 });
 
 test("getCodexSkillPaths discovers existing global and ancestor project Codex skill directories", () => {
