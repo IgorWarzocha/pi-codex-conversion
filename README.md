@@ -42,6 +42,7 @@ Notably:
 Use `/codex` to change adapter settings.
 
 - `/codex all` — use the Codex tool and prompt adapter on every model
+- `/codex status` — toggle the footer/statusline entry
 - `/codex fast` — toggle priority service tier for the OpenAI Codex provider
 - `/codex search` — toggle native Codex web search
 - `/codex image` — toggle native Codex image generation

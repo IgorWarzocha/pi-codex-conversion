@@ -44,6 +44,19 @@ export default function codexConversion(pi: ExtensionAPI) {
 	const tracker = createExecCommandTracker();
 	const state: AdapterState = { enabled: false, cwd: process.cwd(), promptSkills: [], config: readCodexConversionConfig() };
 	const sessions = createExecSessionManager();
+	let nativeWebSearchRegistered = false;
+	let nativeImageGenerationRegistered = false;
+
+	function ensureOptionalNativeToolsRegistered(config = state.config): void {
+		if (config.webSearch && !nativeWebSearchRegistered) {
+			registerWebSearchTool(pi);
+			nativeWebSearchRegistered = true;
+		}
+		if (config.imageGeneration && !nativeImageGenerationRegistered) {
+			registerImageGenerationTool(pi);
+			nativeImageGenerationRegistered = true;
+		}
+	}
 
 	registerOpenAICodexCustomProvider(pi, {
 		getCurrentCwd: () => state.cwd,
@@ -51,9 +64,8 @@ export default function codexConversion(pi: ExtensionAPI) {
 	registerApplyPatchTool(pi);
 	registerExecCommandTool(pi, tracker, sessions);
 	registerWriteStdinTool(pi, sessions);
-	registerImageGenerationTool(pi);
-	registerWebSearchTool(pi);
-	registerCodexCommand(pi, state);
+	ensureOptionalNativeToolsRegistered();
+	registerCodexCommand(pi, state, ensureOptionalNativeToolsRegistered);
 
 	sessions.onSessionExit((sessionId) => {
 		tracker.recordSessionFinished(sessionId);
@@ -62,6 +74,7 @@ export default function codexConversion(pi: ExtensionAPI) {
 	pi.on("session_start", async (_event, ctx) => {
 		state.cwd = ctx.cwd;
 		state.config = readCodexConversionConfig();
+		ensureOptionalNativeToolsRegistered();
 		state.promptSkills = extractPiPromptSkills(ctx.getSystemPrompt());
 		registerViewImageTool(pi, { allowOriginalDetail: supportsOriginalImageDetail(ctx.model) });
 		clearApplyPatchRenderState();

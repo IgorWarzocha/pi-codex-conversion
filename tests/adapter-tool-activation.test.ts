@@ -14,6 +14,24 @@ test("mergeAdapterTools replaces Pi core tools but preserves unrelated active to
 	);
 });
 
+test("mergeAdapterTools preserves optional tool names that are not adapter-owned", () => {
+	assert.deepEqual(
+		mergeAdapterTools(["read", "web_search", "image_generation", "parallel"], ["exec_command", "write_stdin", "apply_patch"]),
+		["exec_command", "write_stdin", "apply_patch", "web_search", "image_generation", "parallel"],
+	);
+});
+
+test("mergeAdapterTools strips optional tool names when they are adapter-owned", () => {
+	assert.deepEqual(
+		mergeAdapterTools(
+			["read", "web_search", "image_generation", "parallel"],
+			["exec_command", "write_stdin", "apply_patch"],
+			["exec_command", "write_stdin", "apply_patch", "web_search", "image_generation"],
+		),
+		["exec_command", "write_stdin", "apply_patch", "parallel"],
+	);
+});
+
 test("restoreTools restores previous tools and keeps custom tools added while adapter mode was enabled", () => {
 	assert.deepEqual(
 		restoreTools(["read", "bash", "edit", "write", "parallel"], ["exec_command", "write_stdin", "apply_patch", "parallel", "custom_search"]),
@@ -45,6 +63,13 @@ test("stripAdapterTools removes every adapter-owned tool", () => {
 	);
 });
 
+test("stripAdapterTools can preserve disabled optional tool names", () => {
+	assert.deepEqual(
+		stripAdapterTools(["read", "exec_command", "web_search", "image_generation", "parallel"], ["exec_command", "write_stdin", "apply_patch", "view_image"]),
+		["read", "web_search", "image_generation", "parallel"],
+	);
+});
+
 test("buildStatusText includes verbosity plus enabled web search and fast flags", () => {
 	assert.equal(
 		buildStatusText({ verbosity: "medium", webSearch: true, imageGeneration: true, fast: true, useOnAllModels: true }),
@@ -62,7 +87,7 @@ test("buildStatusText includes verbosity plus enabled web search and fast flags"
 
 test("applyCodexRequestParams patches verbosity and priority service tier", () => {
 	assert.deepEqual(
-		applyCodexRequestParams({ input: "hello", text: { format: { type: "text" } } }, { fast: true, imageGeneration: true, useOnAllModels: false, webSearch: true, verbosity: "high" }),
+		applyCodexRequestParams({ input: "hello", text: { format: { type: "text" } } }, { fast: true, imageGeneration: true, statusLine: true, useOnAllModels: false, webSearch: true, verbosity: "high" }),
 		{
 			input: "hello",
 			service_tier: "priority",
@@ -75,7 +100,7 @@ test("applyCodexRequestParams can apply verbosity without priority service tier"
 	assert.deepEqual(
 		applyCodexRequestParams(
 			{ input: "hello" },
-			{ fast: true, imageGeneration: true, useOnAllModels: true, webSearch: true, verbosity: "medium" },
+			{ fast: true, imageGeneration: true, statusLine: true, useOnAllModels: true, webSearch: true, verbosity: "medium" },
 			{ serviceTier: false, verbosity: true },
 		),
 		{ input: "hello", text: { verbosity: "medium" } },
@@ -92,7 +117,7 @@ test("writeCodexConversionConfig reports write failures", () => {
 		const blockedPath = join(root, "blocked");
 		writeFileSync(blockedPath, "not a directory");
 		const result = writeCodexConversionConfig(
-			{ fast: false, imageGeneration: true, useOnAllModels: false, webSearch: true, verbosity: "low" },
+			{ fast: false, imageGeneration: true, statusLine: true, useOnAllModels: false, webSearch: true, verbosity: "low" },
 			join(blockedPath, "pi-codex-conversion.json"),
 		);
 		assert.equal(result.ok, false);
@@ -106,7 +131,7 @@ test("writeCodexConversionConfig reports successful writes", () => {
 	try {
 		const configPath = join(root, "pi-codex-conversion.json");
 		const result = writeCodexConversionConfig(
-			{ fast: true, imageGeneration: false, useOnAllModels: true, webSearch: false, verbosity: "high" },
+			{ fast: true, imageGeneration: false, statusLine: false, useOnAllModels: true, webSearch: false, verbosity: "high" },
 			configPath,
 		);
 		assert.equal(result.ok, true);

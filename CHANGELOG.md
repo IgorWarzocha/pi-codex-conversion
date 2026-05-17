@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.5.5
+
+- Avoid registering disabled native `web_search` and `image_generation` tools so other extensions can own those names.
+- Preserve other extensions' `web_search` and `image_generation` tools when the matching Codex feature is off.
+- Added a `/codex status` toggle and settings UI option for hiding the Codex footer/statusline.
+
 ## 1.5.4
 
 - Added `/codex` settings UI.

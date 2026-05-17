@@ -13,6 +13,7 @@ export async function openCodexSettingsScreen(ctx: ExtensionContext, options: Co
 	await ctx.ui.custom<void>((tui, theme, _kb, done) => {
 		const buildItems = (): SettingItem[] => [
 			{ id: "useOnAllModels", label: "Use on all models", currentValue: draft.useOnAllModels ? "on" : "off", values: ["off", "on"] },
+			{ id: "statusLine", label: "Statusline", currentValue: draft.statusLine ? "on" : "off", values: ["off", "on"] },
 			{ id: "fast", label: "Fast mode", currentValue: draft.fast ? "on" : "off", values: ["off", "on"] },
 			{ id: "webSearch", label: "Web search", currentValue: draft.webSearch ? "on" : "off", values: ["off", "on"] },
 			{ id: "imageGeneration", label: "Image generation", currentValue: draft.imageGeneration ? "on" : "off", values: ["off", "on"] },
@@ -27,6 +28,7 @@ export async function openCodexSettingsScreen(ctx: ExtensionContext, options: Co
 			const nextDraft = { ...draft };
 			const previousValue = buildItems().find((item) => item.id === id)?.currentValue;
 			if (id === "useOnAllModels") nextDraft.useOnAllModels = value === "on";
+			if (id === "statusLine") nextDraft.statusLine = value === "on";
 			if (id === "fast") nextDraft.fast = value === "on";
 			if (id === "webSearch") nextDraft.webSearch = value === "on";
 			if (id === "imageGeneration") nextDraft.imageGeneration = value === "on";

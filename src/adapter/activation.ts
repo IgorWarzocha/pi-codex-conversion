@@ -15,6 +15,7 @@ import { supportsNativeImageGeneration } from "../tools/image-generation-tool.ts
 import { supportsNativeWebSearch } from "../tools/web-search-tool.ts";
 
 const ADAPTER_TOOL_NAMES = [...CORE_ADAPTER_TOOL_NAMES, WEB_SEARCH_TOOL_NAME, IMAGE_GENERATION_TOOL_NAME, VIEW_IMAGE_TOOL_NAME];
+const ALWAYS_OWNED_ADAPTER_TOOL_NAMES = [...CORE_ADAPTER_TOOL_NAMES, VIEW_IMAGE_TOOL_NAME];
 
 export function syncAdapter(pi: ExtensionAPI, ctx: ExtensionContext, state: AdapterState): void {
 	if (shouldUseCodexAdapter(ctx, state.config)) {
@@ -29,12 +30,13 @@ export function shouldUseCodexAdapter(ctx: ExtensionContext, config: CodexConver
 }
 
 function enableAdapter(pi: ExtensionAPI, ctx: ExtensionContext, state: AdapterState): void {
-	const toolNames = mergeAdapterTools(pi.getActiveTools(), getAdapterToolNames(ctx, state.config));
+	const adapterOwnedTools = state.enabled ? ADAPTER_TOOL_NAMES : getAdapterOwnedToolNames(state.config);
+	const toolNames = mergeAdapterTools(pi.getActiveTools(), getAdapterToolNames(ctx, state.config), adapterOwnedTools);
 	if (!state.enabled) {
 		// Preserve the previous active set once so switching away from Codex-like
 		// models restores the user's existing Pi tool configuration. Strip adapter
 		// tools in case a fresh session starts from persisted/mixed active tools.
-		state.previousToolNames = stripAdapterTools(pi.getActiveTools());
+		state.previousToolNames = stripAdapterTools(pi.getActiveTools(), adapterOwnedTools);
 		state.enabled = true;
 	}
 	pi.setActiveTools(toolNames);
@@ -43,8 +45,9 @@ function enableAdapter(pi: ExtensionAPI, ctx: ExtensionContext, state: AdapterSt
 
 function disableAdapter(pi: ExtensionAPI, ctx: ExtensionContext, state: AdapterState): void {
 	const previousToolNames = state.previousToolNames && state.previousToolNames.length > 0 ? state.previousToolNames : DEFAULT_TOOL_NAMES;
-	const restoredTools = restoreTools(previousToolNames, pi.getActiveTools());
-	if (state.enabled || hasAdapterTools(pi.getActiveTools())) {
+	const adapterOwnedTools = state.enabled ? ADAPTER_TOOL_NAMES : getAdapterOwnedToolNames(state.config);
+	const restoredTools = restoreTools(previousToolNames, pi.getActiveTools(), adapterOwnedTools);
+	if (state.enabled || hasAdapterTools(pi.getActiveTools(), adapterOwnedTools)) {
 		pi.setActiveTools(restoredTools);
 	}
 	if (state.enabled) {
@@ -55,6 +58,10 @@ function disableAdapter(pi: ExtensionAPI, ctx: ExtensionContext, state: AdapterS
 
 function setStatus(ctx: ExtensionContext, enabled: boolean, config: CodexConversionConfig): void {
 	if (!ctx.hasUI) return;
+	if (!config.statusLine) {
+		ctx.ui.setStatus(STATUS_KEY, undefined);
+		return;
+	}
 	const statusConfig = getStatusConfig(ctx, config);
 	ctx.ui.setStatus(STATUS_KEY, enabled ? buildStatusText(statusConfig) : undefined);
 }
@@ -85,25 +92,34 @@ function getAdapterToolNames(ctx: ExtensionContext, config: CodexConversionConfi
 	return toolNames;
 }
 
-export function mergeAdapterTools(activeTools: string[], adapterTools: string[]): string[] {
-	const preservedTools = activeTools.filter((toolName) => !DEFAULT_TOOL_NAMES.includes(toolName) && !ADAPTER_TOOL_NAMES.includes(toolName));
+function getAdapterOwnedToolNames(config: CodexConversionConfig): string[] {
+	return [
+		...ALWAYS_OWNED_ADAPTER_TOOL_NAMES,
+		...(config.webSearch ? [WEB_SEARCH_TOOL_NAME] : []),
+		...(config.imageGeneration ? [IMAGE_GENERATION_TOOL_NAME] : []),
+	];
+}
+
+export function mergeAdapterTools(activeTools: string[], adapterTools: string[], adapterOwnedTools: string[] = adapterTools): string[] {
+	const ownedTools = new Set([...ALWAYS_OWNED_ADAPTER_TOOL_NAMES, ...adapterTools, ...adapterOwnedTools]);
+	const preservedTools = activeTools.filter((toolName) => !DEFAULT_TOOL_NAMES.includes(toolName) && !ownedTools.has(toolName));
 	return [...adapterTools, ...preservedTools];
 }
 
-export function restoreTools(previousTools: string[], activeTools: string[]): string[] {
-	const restored = stripAdapterTools(previousTools);
+export function restoreTools(previousTools: string[], activeTools: string[], adapterOwnedTools: string[] = ADAPTER_TOOL_NAMES): string[] {
+	const restored = stripAdapterTools(previousTools, adapterOwnedTools);
 	for (const toolName of activeTools) {
-		if (!ADAPTER_TOOL_NAMES.includes(toolName) && !restored.includes(toolName)) {
+		if (!adapterOwnedTools.includes(toolName) && !restored.includes(toolName)) {
 			restored.push(toolName);
 		}
 	}
 	return restored;
 }
 
-export function stripAdapterTools(toolNames: string[]): string[] {
-	return toolNames.filter((toolName) => !ADAPTER_TOOL_NAMES.includes(toolName));
+export function stripAdapterTools(toolNames: string[], adapterOwnedTools: string[] = ADAPTER_TOOL_NAMES): string[] {
+	return toolNames.filter((toolName) => !adapterOwnedTools.includes(toolName));
 }
 
-function hasAdapterTools(activeTools: string[]): boolean {
-	return activeTools.some((toolName) => ADAPTER_TOOL_NAMES.includes(toolName));
+function hasAdapterTools(activeTools: string[], adapterOwnedTools: string[]): boolean {
+	return activeTools.some((toolName) => adapterOwnedTools.includes(toolName));
 }
