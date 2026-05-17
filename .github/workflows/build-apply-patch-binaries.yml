@@ -134,23 +134,18 @@ jobs:
           npm run check
           npm pack --dry-run --ignore-scripts
 
-      - name: Publish dev tag
-        if: github.event_name == 'push' && github.ref_name == 'dev'
-        run: npm publish --tag dev --access public
-
-      - name: Publish latest tag
-        if: github.event_name == 'push' && (github.ref_name == 'main' || github.ref_name == 'master')
-        run: npm publish --tag latest --access public
-
       - name: Prepare GitHub release notes
         id: release
         if: github.event_name == 'push' && (github.ref_name == 'main' || github.ref_name == 'master')
         run: node .github/scripts/prepare-github-release.mjs
 
-      - name: Tag published commit
+      - name: Tag release commit
         if: github.event_name == 'push' && (github.ref_name == 'main' || github.ref_name == 'master')
         shell: bash
         run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
           tag="${{ steps.release.outputs.tag }}"
           if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
             tag_sha="$(git ls-remote origin "refs/tags/$tag^{}" | awk '{print $1}')"
@@ -165,6 +160,22 @@ jobs:
           else
             git tag -a "$tag" -m "$tag"
             git push origin "$tag"
+          fi
+
+      - name: Publish dev tag
+        if: github.event_name == 'push' && github.ref_name == 'dev'
+        run: npm publish --tag dev --access public
+
+      - name: Publish latest tag
+        if: github.event_name == 'push' && (github.ref_name == 'main' || github.ref_name == 'master')
+        shell: bash
+        run: |
+          package="$(node -p "require('./package.json').name")"
+          version="${{ steps.release.outputs.version }}"
+          if npm view "$package@$version" version >/dev/null 2>&1; then
+            echo "$package@$version is already published; continuing to GitHub release creation."
+          else
+            npm publish --tag latest --access public
           fi
 
       - name: Create or update GitHub release

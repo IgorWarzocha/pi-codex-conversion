@@ -9,10 +9,18 @@ if (!version || version.includes('-')) {
 }
 const tag = `v${version}`;
 const sha = process.env.GITHUB_SHA || git(['rev-parse', 'HEAD']);
-const repo = process.env.GITHUB_REPOSITORY || git(['config', '--get', 'remote.origin.url']).replace(/^.*github.com[:/]/, '').replace(/\.git$/, '');
+const repo = process.env.GITHUB_REPOSITORY || remoteRepository();
 
 function git(args, options = {}) {
   return execFileSync('git', args, { encoding: 'utf8', ...options }).trim();
+}
+
+function remoteRepository() {
+  try {
+    return git(['config', '--get', 'remote.origin.url']).replace(/^.*github.com[:/]/, '').replace(/\.git$/, '');
+  } catch {
+    return '';
+  }
 }
 
 function changelogSection(markdown, wantedVersion) {
@@ -34,7 +42,7 @@ const section = changelog ? changelogSection(changelog, version) : '';
 const prev = previousTag(tag);
 const range = prev ? `${prev}..${sha}` : sha;
 const commits = git(['log', '--pretty=format:- %s (%h)', range]).split('\n').filter(Boolean).join('\n');
-const compare = prev ? `https://github.com/${repo}/compare/${prev}...${tag}` : '';
+const compare = prev && repo ? `https://github.com/${repo}/compare/${prev}...${tag}` : '';
 
 let notes = `# ${tag}\n\n`;
 if (section) {
