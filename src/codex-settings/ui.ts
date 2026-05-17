@@ -25,6 +25,7 @@ export async function openCodexSettingsScreen(ctx: ExtensionContext, options: Co
 		let settingsList: SettingsList;
 		settingsList = new SettingsList(buildItems(), 6, getSettingsListTheme(), (id, value) => {
 			const nextDraft = { ...draft };
+			const previousValue = buildItems().find((item) => item.id === id)?.currentValue;
 			if (id === "useOnAllModels") nextDraft.useOnAllModels = value === "on";
 			if (id === "fast") nextDraft.fast = value === "on";
 			if (id === "webSearch") nextDraft.webSearch = value === "on";
@@ -32,6 +33,8 @@ export async function openCodexSettingsScreen(ctx: ExtensionContext, options: Co
 			if (id === "verbosity") nextDraft.verbosity = normalizeCodexVerbosity(value) ?? DEFAULT_CODEX_CONVERSION_CONFIG.verbosity;
 			if (options.onChange(nextDraft)) {
 				draft = nextDraft;
+			} else if (previousValue !== undefined) {
+				settingsList.updateValue(id, previousValue);
 			}
 			tui.requestRender();
 		}, () => done(undefined));

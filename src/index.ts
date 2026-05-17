@@ -62,6 +62,8 @@ export default function codexConversion(pi: ExtensionAPI) {
 	pi.on("session_start", async (_event, ctx) => {
 		state.cwd = ctx.cwd;
 		state.config = readCodexConversionConfig();
+		state.promptSkills = extractPiPromptSkills(ctx.getSystemPrompt());
+		registerViewImageTool(pi, { allowOriginalDetail: supportsOriginalImageDetail(ctx.model) });
 		clearApplyPatchRenderState();
 		tracker.clear();
 		syncAdapter(pi, ctx, state);
@@ -74,6 +76,8 @@ export default function codexConversion(pi: ExtensionAPI) {
 
 	pi.on("model_select", async (_event, ctx) => {
 		state.cwd = ctx.cwd;
+		state.promptSkills = extractPiPromptSkills(ctx.getSystemPrompt());
+		registerViewImageTool(pi, { allowOriginalDetail: supportsOriginalImageDetail(ctx.model) });
 		syncAdapter(pi, ctx, state);
 	});
 
