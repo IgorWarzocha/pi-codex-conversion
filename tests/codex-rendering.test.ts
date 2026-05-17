@@ -101,6 +101,26 @@ test("renderGroupedExecCommandCall annotates SKILL.md reads with the skill direc
 	assert.equal(text, "• Explored\n  └ Read anti-ai-copy skill, AGENTS.md");
 });
 
+test("renderGroupedExecCommandCall only annotates SKILL.md reads under skills directories", () => {
+	const theme = createTheme();
+	const text = renderGroupedExecCommandCall(
+		[
+			[
+				{
+					kind: "read",
+					command: "cat /repo/docs/SKILL.md",
+					name: "SKILL.md",
+					path: "/repo/docs/SKILL.md",
+				},
+			],
+		],
+		"done",
+		theme,
+	);
+
+	assert.equal(text, "• Explored\n  └ Read SKILL.md");
+});
+
 test("renderGroupedExecCommandCall preserves earlier reads when a coalesced batch ends with a skill", () => {
 	const theme = createTheme();
 	const text = renderGroupedExecCommandCall(
