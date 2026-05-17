@@ -30,7 +30,8 @@ export function shouldUseCodexAdapter(ctx: ExtensionContext, config: CodexConver
 }
 
 function enableAdapter(pi: ExtensionAPI, ctx: ExtensionContext, state: AdapterState): void {
-	const adapterOwnedTools = state.enabled ? ADAPTER_TOOL_NAMES : getAdapterOwnedToolNames(state.config);
+	const currentAdapterOwnedTools = getAdapterOwnedToolNames(state.config);
+	const adapterOwnedTools = state.enabled ? mergeToolNames(state.adapterOwnedToolNames ?? currentAdapterOwnedTools, currentAdapterOwnedTools) : currentAdapterOwnedTools;
 	const toolNames = mergeAdapterTools(pi.getActiveTools(), getAdapterToolNames(ctx, state.config), adapterOwnedTools);
 	if (!state.enabled) {
 		// Preserve the previous active set once so switching away from Codex-like
@@ -39,19 +40,21 @@ function enableAdapter(pi: ExtensionAPI, ctx: ExtensionContext, state: AdapterSt
 		state.previousToolNames = stripAdapterTools(pi.getActiveTools(), adapterOwnedTools);
 		state.enabled = true;
 	}
+	state.adapterOwnedToolNames = currentAdapterOwnedTools;
 	pi.setActiveTools(toolNames);
 	setStatus(ctx, true, state.config);
 }
 
 function disableAdapter(pi: ExtensionAPI, ctx: ExtensionContext, state: AdapterState): void {
 	const previousToolNames = state.previousToolNames && state.previousToolNames.length > 0 ? state.previousToolNames : DEFAULT_TOOL_NAMES;
-	const adapterOwnedTools = state.enabled ? ADAPTER_TOOL_NAMES : getAdapterOwnedToolNames(state.config);
+	const adapterOwnedTools = state.adapterOwnedToolNames ?? getAdapterOwnedToolNames(state.config);
 	const restoredTools = restoreTools(previousToolNames, pi.getActiveTools(), adapterOwnedTools);
 	if (state.enabled || hasAdapterTools(pi.getActiveTools(), adapterOwnedTools)) {
 		pi.setActiveTools(restoredTools);
 	}
 	if (state.enabled) {
 		state.enabled = false;
+		state.adapterOwnedToolNames = undefined;
 	}
 	setStatus(ctx, false, state.config);
 }
@@ -98,6 +101,10 @@ function getAdapterOwnedToolNames(config: CodexConversionConfig): string[] {
 		...(config.webSearch ? [WEB_SEARCH_TOOL_NAME] : []),
 		...(config.imageGeneration ? [IMAGE_GENERATION_TOOL_NAME] : []),
 	];
+}
+
+function mergeToolNames(...toolNameGroups: string[][]): string[] {
+	return [...new Set(toolNameGroups.flat())];
 }
 
 export function mergeAdapterTools(activeTools: string[], adapterTools: string[], adapterOwnedTools: string[] = adapterTools): string[] {
