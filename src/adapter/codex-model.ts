@@ -11,6 +11,11 @@ export function isOpenAICodexModel(model: Partial<CodexLikeModelDescriptor> | nu
 	return (model.provider ?? "").toLowerCase() === "openai-codex";
 }
 
+export function isResponsesModel(model: Partial<CodexLikeModelDescriptor> | null | undefined): boolean {
+	if (!model) return false;
+	return (model.api ?? "").toLowerCase().includes("responses");
+}
+
 // Keep model detection intentionally conservative. The adapter replaces the
 // system prompt and tool surface, so false positives are worse than misses.
 export function isCodexLikeModel(model: Partial<CodexLikeModelDescriptor> | null | undefined): boolean {
@@ -29,4 +34,8 @@ export function isCodexLikeContext(ctx: ExtensionContext): boolean {
 
 export function isOpenAICodexContext(ctx: ExtensionContext): boolean {
 	return isOpenAICodexModel(ctx.model);
+}
+
+export function isResponsesContext(ctx: ExtensionContext): boolean {
+	return isResponsesModel(ctx.model);
 }

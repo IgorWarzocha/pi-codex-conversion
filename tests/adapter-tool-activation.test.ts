@@ -1,8 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { applyCodexRequestParams, getCodexConversionConfigPath, writeCodexConversionConfig } from "../src/adapter/config.ts";
+import { buildStatusText } from "../src/adapter/tool-set.ts";
 import { getCodexSkillPaths, mergeAdapterTools, restoreTools, stripAdapterTools } from "../src/index.ts";
 
 test("mergeAdapterTools replaces Pi core tools but preserves unrelated active tools", () => {
@@ -41,6 +43,77 @@ test("stripAdapterTools removes every adapter-owned tool", () => {
 		stripAdapterTools(["read", "exec_command", "write_stdin", "apply_patch", "web_search", "image_generation", "view_image", "parallel"]),
 		["read", "parallel"],
 	);
+});
+
+test("buildStatusText includes verbosity plus enabled web search and fast flags", () => {
+	assert.equal(
+		buildStatusText({ verbosity: "medium", webSearch: true, imageGeneration: true, fast: true, useOnAllModels: true }),
+		"\u001b[38;2;0;76;255mCodex adapter\u001b[0m V: mid • all models • web search • image gen • fast",
+	);
+	assert.equal(
+		buildStatusText({ verbosity: "low", webSearch: false, imageGeneration: false, fast: false, useOnAllModels: false }),
+		"\u001b[38;2;0;76;255mCodex adapter\u001b[0m V: low",
+	);
+	assert.equal(
+		buildStatusText({ webSearch: false, imageGeneration: false, fast: false, useOnAllModels: true }),
+		"\u001b[38;2;0;76;255mCodex adapter\u001b[0m • all models",
+	);
+});
+
+test("applyCodexRequestParams patches verbosity and priority service tier", () => {
+	assert.deepEqual(
+		applyCodexRequestParams({ input: "hello", text: { format: { type: "text" } } }, { fast: true, imageGeneration: true, useOnAllModels: false, webSearch: true, verbosity: "high" }),
+		{
+			input: "hello",
+			service_tier: "priority",
+			text: { format: { type: "text" }, verbosity: "high" },
+		},
+	);
+});
+
+test("applyCodexRequestParams can apply verbosity without priority service tier", () => {
+	assert.deepEqual(
+		applyCodexRequestParams(
+			{ input: "hello" },
+			{ fast: true, imageGeneration: true, useOnAllModels: true, webSearch: true, verbosity: "medium" },
+			{ serviceTier: false, verbosity: true },
+		),
+		{ input: "hello", text: { verbosity: "medium" } },
+	);
+});
+
+test("codex config path is rooted in Pi's agent directory", () => {
+	assert.equal(getCodexConversionConfigPath("/tmp/custom-agent"), join("/tmp/custom-agent", "pi-codex-conversion.json"));
+});
+
+test("writeCodexConversionConfig reports write failures", () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-codex-config-"));
+	try {
+		const blockedPath = join(root, "blocked");
+		writeFileSync(blockedPath, "not a directory");
+		const result = writeCodexConversionConfig(
+			{ fast: false, imageGeneration: true, useOnAllModels: false, webSearch: true, verbosity: "low" },
+			join(blockedPath, "pi-codex-conversion.json"),
+		);
+		assert.equal(result.ok, false);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("writeCodexConversionConfig reports successful writes", () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-codex-config-"));
+	try {
+		const configPath = join(root, "pi-codex-conversion.json");
+		const result = writeCodexConversionConfig(
+			{ fast: true, imageGeneration: false, useOnAllModels: true, webSearch: false, verbosity: "high" },
+			configPath,
+		);
+		assert.equal(result.ok, true);
+		assert.match(readFileSync(configPath, "utf8"), /"useOnAllModels": true/);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
 });
 
 test("getCodexSkillPaths discovers existing global and ancestor project Codex skill directories", () => {
