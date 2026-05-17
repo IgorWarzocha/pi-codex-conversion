@@ -1,6 +1,6 @@
 {
   "name": "@howaboua/pi-codex-conversion",
-  "version": "1.5.3",
+  "version": "1.5.4",
   "description": "Codex-oriented tool and prompt adapter for pi coding agent",
   "type": "module",
   "repository": {
@@ -33,6 +33,7 @@
     "bin/apply_patch.cmd",
     "vendor/apply-patch/**",
     "available-tools.png",
+    "CHANGELOG.md",
     "README.md",
     "LICENSE"
   ],
@@ -59,9 +60,9 @@
     "typebox": "*"
   },
   "devDependencies": {
-    "@earendil-works/pi-ai": "^0.74.0",
-    "@earendil-works/pi-coding-agent": "^0.74.0",
-    "@earendil-works/pi-tui": "^0.74.0",
+    "@earendil-works/pi-ai": "^0.74.1",
+    "@earendil-works/pi-coding-agent": "^0.74.1",
+    "@earendil-works/pi-tui": "^0.74.1",
     "tsx": "^4.20.5",
     "typebox": "^1.1.24",
     "typescript": "^5.9.3"

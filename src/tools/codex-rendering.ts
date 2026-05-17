@@ -96,6 +96,7 @@ function skillNameFromSkillPath(path: string): string | undefined {
 	const normalized = path.replace(/\\/g, "/");
 	const parts = normalized.split("/").filter(Boolean);
 	if (parts.at(-1) !== "SKILL.md") return undefined;
+	if (parts.at(-3) !== "skills") return undefined;
 	const skillDir = parts.at(-2);
 	return skillDir && skillDir !== ".system" ? skillDir : undefined;
 }
