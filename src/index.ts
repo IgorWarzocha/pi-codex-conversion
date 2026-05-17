@@ -24,7 +24,7 @@ import {
 	type CodexConversionConfig,
 } from "./adapter/config.ts";
 import { clearApplyPatchRenderState, registerApplyPatchTool } from "./tools/apply-patch-tool.ts";
-import { isCodexLikeContext, isOpenAICodexContext } from "./adapter/codex-model.ts";
+import { isCodexLikeContext, isOpenAICodexContext, isResponsesContext } from "./adapter/codex-model.ts";
 import { createExecCommandTracker } from "./tools/exec-command-state.ts";
 import { registerExecCommandTool } from "./tools/exec-command-tool.ts";
 import { createExecSessionManager } from "./tools/exec-session-manager.ts";
@@ -154,14 +154,18 @@ export default function codexConversion(pi: ExtensionAPI) {
 
 	pi.on("before_provider_request", async (event, ctx) => {
 		state.cwd = ctx.cwd;
-		if (!isOpenAICodexContext(ctx)) {
+		if (!isOpenAICodexContext(ctx) && !isResponsesContext(ctx)) {
 			return undefined;
 		}
-		const webSearchPayload = state.config.webSearch ? rewriteNativeWebSearchTool(event.payload, ctx.model) : event.payload;
-		const imageGenerationPayload = state.config.imageGeneration
+		const isOpenAICodex = isOpenAICodexContext(ctx);
+		const webSearchPayload = isOpenAICodex && state.config.webSearch ? rewriteNativeWebSearchTool(event.payload, ctx.model) : event.payload;
+		const imageGenerationPayload = isOpenAICodex && state.config.imageGeneration
 			? rewriteNativeImageGenerationTool(webSearchPayload, ctx.model)
 			: webSearchPayload;
-		return applyCodexRequestParams(imageGenerationPayload, state.config);
+		return applyCodexRequestParams(imageGenerationPayload, state.config, {
+			serviceTier: isOpenAICodex,
+			verbosity: true,
+		});
 	});
 
 	pi.on("context", async (event) => {
@@ -380,7 +384,9 @@ function setStatus(ctx: ExtensionContext, enabled: boolean, config: CodexConvers
 			? buildStatusText(
 					isOpenAICodexContext(ctx)
 						? config
-						: { useOnAllModels: config.useOnAllModels, fast: false, webSearch: false, imageGeneration: false },
+						: isResponsesContext(ctx)
+							? { useOnAllModels: config.useOnAllModels, fast: false, webSearch: false, imageGeneration: false, verbosity: config.verbosity }
+							: { useOnAllModels: config.useOnAllModels, fast: false, webSearch: false, imageGeneration: false },
 				)
 			: undefined,
 	);

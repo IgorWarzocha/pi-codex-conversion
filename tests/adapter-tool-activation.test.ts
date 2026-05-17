@@ -71,6 +71,17 @@ test("applyCodexRequestParams patches verbosity and priority service tier", () =
 	);
 });
 
+test("applyCodexRequestParams can apply verbosity without priority service tier", () => {
+	assert.deepEqual(
+		applyCodexRequestParams(
+			{ input: "hello" },
+			{ fast: true, imageGeneration: true, useOnAllModels: true, webSearch: true, verbosity: "medium" },
+			{ serviceTier: false, verbosity: true },
+		),
+		{ input: "hello", text: { verbosity: "medium" } },
+	);
+});
+
 test("getCodexSkillPaths discovers existing global and ancestor project Codex skill directories", () => {
 	const root = mkdtempSync(join(tmpdir(), "pi-codex-skills-"));
 	try {

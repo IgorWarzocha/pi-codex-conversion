@@ -9,20 +9,12 @@ GPT/Codex models are strongest when the tool surface looks like the Codex CLI th
 
 The point is to give the model tools it already knows how to use well: shell-first inspection, resumable command sessions, and large one-shot patch edits instead of piecemeal read/edit/write steps.
 
+You can also opt into using the adapter on every provider/model. YMMV: Codex-tuned models are still the best fit, but the shell/patch workflow can help elsewhere too. The extension also has a small `/codex` settings UI for toggling adapter behavior, web search, image generation, fast mode, and verbosity. See [Settings](#settings).
+
 ## Install
 
 ```bash
 pi install npm:@howaboua/pi-codex-conversion
-```
-
-## Development checkout
-
-The Git checkout is mostly for development and mirrors the maintainer workflow. If you run it directly, you may need to build the bundled `apply_patch` binary for your platform.
-
-Run the current checkout without installing globally:
-
-```bash
-pi --no-extensions --no-skills -e /path/to/pi-codex-conversion
 ```
 
 ![Available tools](./available-tools.png)
@@ -45,13 +37,29 @@ Notably:
 - file creation and edits should default to `apply_patch`
 - Pi may still expose additional runtime tools such as `parallel`; the prompt is written to tolerate that instead of assuming a fixed four-tool universe
 
+## Settings
+
+Use `/codex` to change adapter settings.
+
+- `/codex all` — use the Codex tool and prompt adapter on every model
+- `/codex fast` — toggle priority service tier for the OpenAI Codex provider
+- `/codex search` — toggle native Codex web search
+- `/codex image` — toggle native Codex image generation
+- `/codex low`, `/codex medium`, `/codex high` — set Responses API verbosity
+
+Settings are saved globally in `~/.pi/agent/pi-codex-conversion.json`.
+
+When `all` is on, non-Codex providers get the shell, patch, skill, and prompt-adapter behavior, but keep their normal Pi provider path. Native web search, native image generation, and priority service tier stay limited to the OpenAI Codex provider. Verbosity is applied to Responses API providers.
+
+The footer shows the active state, for example:
+
+```text
+Codex adapter V: low • web search • image gen
+```
+
 ## What changes in Pi
 
 - Adapter mode activates automatically for OpenAI `gpt*` and `codex*` models, then restores the previous tool set when you switch away.
-- `/codex` opens adapter settings. `/codex all` toggles the Codex tool/prompt adapter for every model, `/codex fast` toggles priority service tier, `/codex search` toggles native web search, `/codex image` toggles image generation, and `/codex low|medium|high` sets Responses verbosity.
-- On non-Codex providers, `/codex all` uses the Codex shell/patch tools and prompt/skills enhancements while leaving provider-specific features such as verbosity, native web search, image generation, and service tier on Pi's standard provider path.
-- Settings are saved globally in `~/.pi/agent/pi-codex-conversion.json`.
-- The footer status shows the active verbosity and enabled extras, for example `Codex adapter V: low • web search • image gen`.
 - Pi's composed prompt is preserved; the extension only adds a small Codex-style tool-use nudge.
 - Shell activity is rendered with Codex-like labels such as `Ran`, `Explored`, `Read`, and background-terminal status.
 - `apply_patch` renders as Codex-style `Added` / `Edited` / `Deleted` blocks, including inline partial-failure state.
@@ -75,6 +83,16 @@ Raw command output is still available by expanding the tool result.
 - `apply_patch` accepts absolute paths as-is and resolves relative paths against the current working directory.
 - Shell `apply_patch` is also available inside `exec_command`, but the dedicated `apply_patch` tool is preferred unless you are chaining edits with other shell steps.
 - Native `web_search` and `image_generation` are forwarded to OpenAI Codex Responses tools rather than executed as local function tools.
+
+## Development checkout
+
+The Git checkout is mostly for development and mirrors the maintainer workflow. If you run it directly, you may need to build the bundled `apply_patch` binary for your platform.
+
+Run the current checkout without installing globally:
+
+```bash
+pi --no-extensions --no-skills -e /path/to/pi-codex-conversion
+```
 
 ## License
 

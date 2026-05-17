@@ -71,12 +71,16 @@ export function writeCodexConversionConfig(
 	}
 }
 
-export function applyCodexRequestParams(payload: unknown, config: CodexConversionConfig): unknown {
+export function applyCodexRequestParams(
+	payload: unknown,
+	config: CodexConversionConfig,
+	options: { serviceTier?: boolean; verbosity?: boolean } = { serviceTier: true, verbosity: true },
+): unknown {
 	if (!isObject(payload)) return payload;
 	const text = isObject(payload.text) ? payload.text : {};
 	return {
 		...payload,
-		...(config.fast ? { service_tier: "priority" } : {}),
-		text: { ...text, verbosity: config.verbosity },
+		...(options.serviceTier && config.fast ? { service_tier: "priority" } : {}),
+		...(options.verbosity ? { text: { ...text, verbosity: config.verbosity } } : {}),
 	};
 }
