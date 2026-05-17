@@ -4,14 +4,84 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { applyCodexRequestParams, getCodexConversionConfigPath, writeCodexConversionConfig } from "../src/adapter/config.ts";
+import { syncAdapter } from "../src/adapter/activation.ts";
+import type { AdapterState } from "../src/adapter/state.ts";
 import { buildStatusText } from "../src/adapter/tool-set.ts";
 import { getCodexSkillPaths, mergeAdapterTools, restoreTools, stripAdapterTools } from "../src/index.ts";
+
+function createToolHarness(activeTools: string[]) {
+	return {
+		getActiveTools: () => activeTools,
+		setActiveTools: (nextTools: string[]) => {
+			activeTools = nextTools;
+		},
+		activeTools: () => activeTools,
+	};
+}
+
+function createAdapterState(overrides: Partial<AdapterState["config"]> = {}): AdapterState {
+	return {
+		enabled: false,
+		cwd: process.cwd(),
+		promptSkills: [],
+		config: { fast: false, imageGeneration: false, statusLine: true, useOnAllModels: false, webSearch: false, verbosity: "low", ...overrides },
+	};
+}
+
+function createContext(model: { provider: string; api: string; id: string }) {
+	return {
+		hasUI: false,
+		model,
+		ui: { setStatus: () => undefined },
+	};
+}
 
 test("mergeAdapterTools replaces Pi core tools but preserves unrelated active tools", () => {
 	assert.deepEqual(
 		mergeAdapterTools(["read", "bash", "edit", "write", "parallel", "custom_search"], ["exec_command", "write_stdin", "apply_patch"]),
 		["exec_command", "write_stdin", "apply_patch", "parallel", "custom_search"],
 	);
+});
+
+test("mergeAdapterTools preserves optional tool names that are not adapter-owned", () => {
+	assert.deepEqual(
+		mergeAdapterTools(["read", "web_search", "image_generation", "parallel"], ["exec_command", "write_stdin", "apply_patch"]),
+		["exec_command", "write_stdin", "apply_patch", "web_search", "image_generation", "parallel"],
+	);
+});
+
+test("mergeAdapterTools strips optional tool names when they are adapter-owned", () => {
+	assert.deepEqual(
+		mergeAdapterTools(
+			["read", "web_search", "image_generation", "parallel"],
+			["exec_command", "write_stdin", "apply_patch"],
+			["exec_command", "write_stdin", "apply_patch", "web_search", "image_generation"],
+		),
+		["exec_command", "write_stdin", "apply_patch", "parallel"],
+	);
+});
+
+test("syncAdapter preserves disabled optional tools across repeated syncs", () => {
+	const pi = createToolHarness(["read", "web_search", "image_generation", "parallel"]);
+	const ctx = createContext({ provider: "openai", api: "openai-responses", id: "gpt-5" });
+	const state = createAdapterState({ webSearch: false, imageGeneration: false });
+
+	syncAdapter(pi as never, ctx as never, state);
+	syncAdapter(pi as never, ctx as never, state);
+
+	assert.deepEqual(pi.activeTools(), ["exec_command", "write_stdin", "apply_patch", "web_search", "image_generation", "parallel"]);
+});
+
+test("syncAdapter restores preserved disabled optional tools when disabling adapter", () => {
+	const pi = createToolHarness(["read", "web_search", "parallel"]);
+	const codexCtx = createContext({ provider: "openai", api: "openai-responses", id: "gpt-5" });
+	const plainCtx = createContext({ provider: "anthropic", api: "anthropic-messages", id: "claude" });
+	const state = createAdapterState({ webSearch: false });
+
+	syncAdapter(pi as never, codexCtx as never, state);
+	syncAdapter(pi as never, plainCtx as never, state);
+
+	assert.deepEqual(pi.activeTools(), ["read", "web_search", "parallel"]);
 });
 
 test("restoreTools restores previous tools and keeps custom tools added while adapter mode was enabled", () => {
@@ -45,6 +115,13 @@ test("stripAdapterTools removes every adapter-owned tool", () => {
 	);
 });
 
+test("stripAdapterTools can preserve disabled optional tool names", () => {
+	assert.deepEqual(
+		stripAdapterTools(["read", "exec_command", "web_search", "image_generation", "parallel"], ["exec_command", "write_stdin", "apply_patch", "view_image"]),
+		["read", "web_search", "image_generation", "parallel"],
+	);
+});
+
 test("buildStatusText includes verbosity plus enabled web search and fast flags", () => {
 	assert.equal(
 		buildStatusText({ verbosity: "medium", webSearch: true, imageGeneration: true, fast: true, useOnAllModels: true }),
@@ -62,7 +139,7 @@ test("buildStatusText includes verbosity plus enabled web search and fast flags"
 
 test("applyCodexRequestParams patches verbosity and priority service tier", () => {
 	assert.deepEqual(
-		applyCodexRequestParams({ input: "hello", text: { format: { type: "text" } } }, { fast: true, imageGeneration: true, useOnAllModels: false, webSearch: true, verbosity: "high" }),
+		applyCodexRequestParams({ input: "hello", text: { format: { type: "text" } } }, { fast: true, imageGeneration: true, statusLine: true, useOnAllModels: false, webSearch: true, verbosity: "high" }),
 		{
 			input: "hello",
 			service_tier: "priority",
@@ -75,7 +152,7 @@ test("applyCodexRequestParams can apply verbosity without priority service tier"
 	assert.deepEqual(
 		applyCodexRequestParams(
 			{ input: "hello" },
-			{ fast: true, imageGeneration: true, useOnAllModels: true, webSearch: true, verbosity: "medium" },
+			{ fast: true, imageGeneration: true, statusLine: true, useOnAllModels: true, webSearch: true, verbosity: "medium" },
 			{ serviceTier: false, verbosity: true },
 		),
 		{ input: "hello", text: { verbosity: "medium" } },
@@ -92,7 +169,7 @@ test("writeCodexConversionConfig reports write failures", () => {
 		const blockedPath = join(root, "blocked");
 		writeFileSync(blockedPath, "not a directory");
 		const result = writeCodexConversionConfig(
-			{ fast: false, imageGeneration: true, useOnAllModels: false, webSearch: true, verbosity: "low" },
+			{ fast: false, imageGeneration: true, statusLine: true, useOnAllModels: false, webSearch: true, verbosity: "low" },
 			join(blockedPath, "pi-codex-conversion.json"),
 		);
 		assert.equal(result.ok, false);
@@ -106,7 +183,7 @@ test("writeCodexConversionConfig reports successful writes", () => {
 	try {
 		const configPath = join(root, "pi-codex-conversion.json");
 		const result = writeCodexConversionConfig(
-			{ fast: true, imageGeneration: false, useOnAllModels: true, webSearch: false, verbosity: "high" },
+			{ fast: true, imageGeneration: false, statusLine: false, useOnAllModels: true, webSearch: false, verbosity: "high" },
 			configPath,
 		);
 		assert.equal(result.ok, true);
