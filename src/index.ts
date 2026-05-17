@@ -1,19 +1,6 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { existsSync } from "node:fs";
-import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { getCodexRuntimeShell } from "./adapter/runtime-shell.ts";
-import {
-	CORE_ADAPTER_TOOL_NAMES,
-	DEFAULT_TOOL_NAMES,
-	IMAGE_GENERATION_TOOL_NAME,
-	STATUS_KEY,
-	STATUS_TEXT,
-	VIEW_IMAGE_TOOL_NAME,
-	WEB_SEARCH_TOOL_NAME,
-} from "./adapter/tool-set.ts";
 import { clearApplyPatchRenderState, registerApplyPatchTool } from "./tools/apply-patch-tool.ts";
-import { isCodexLikeContext, isOpenAICodexContext } from "./adapter/codex-model.ts";
 import { createExecCommandTracker } from "./tools/exec-command-state.ts";
 import { registerExecCommandTool } from "./tools/exec-command-tool.ts";
 import { createExecSessionManager } from "./tools/exec-session-manager.ts";
@@ -22,26 +9,18 @@ import {
 	WEB_SEARCH_ACTIVITY_MESSAGE_TYPE,
 	registerOpenAICodexCustomProvider,
 } from "./providers/openai-codex-custom-provider.ts";
-import { registerImageGenerationTool, rewriteNativeImageGenerationTool, supportsNativeImageGeneration } from "./tools/image-generation-tool.ts";
-import { buildCodexSystemPrompt, extractPiPromptSkills, resolvePromptSkills, type PromptSkill } from "./prompt/build-system-prompt.ts";
+import { registerImageGenerationTool } from "./tools/image-generation-tool.ts";
+import { buildCodexSystemPrompt, extractPiPromptSkills, resolvePromptSkills } from "./prompt/build-system-prompt.ts";
 import { registerViewImageTool, supportsOriginalImageDetail } from "./tools/view-image-tool.ts";
-import {
-	registerWebSearchTool,
-	rewriteNativeWebSearchTool,
-	supportsNativeWebSearch,
-	WEB_SEARCH_SESSION_NOTE_TYPE,
-} from "./tools/web-search-tool.ts";
+import { registerWebSearchTool, WEB_SEARCH_SESSION_NOTE_TYPE } from "./tools/web-search-tool.ts";
 import { registerWriteStdinTool } from "./tools/write-stdin-tool.ts";
 import { ensureBundledApplyPatchOnPath } from "./tools/apply-patch-binary.ts";
-
-interface AdapterState {
-	enabled: boolean;
-	cwd: string;
-	previousToolNames?: string[];
-	promptSkills: PromptSkill[];
-}
-
-const ADAPTER_TOOL_NAMES = [...CORE_ADAPTER_TOOL_NAMES, WEB_SEARCH_TOOL_NAME, IMAGE_GENERATION_TOOL_NAME, VIEW_IMAGE_TOOL_NAME];
+import { readCodexConversionConfig } from "./adapter/config.ts";
+import { syncAdapter, mergeAdapterTools, restoreTools, stripAdapterTools, shouldUseCodexAdapter } from "./adapter/activation.ts";
+import { rewriteCodexProviderRequest } from "./adapter/provider-request.ts";
+import { getCodexSkillPaths } from "./adapter/skills.ts";
+import type { AdapterState } from "./adapter/state.ts";
+import { registerCodexCommand } from "./codex-settings/command.ts";
 
 function getCommandArg(args: unknown): string | undefined {
 	if (!args || typeof args !== "object" || !("cmd" in args) || typeof args.cmd !== "string") {
@@ -63,7 +42,7 @@ function isToolCallOnlyAssistantMessage(message: unknown): boolean {
 export default function codexConversion(pi: ExtensionAPI) {
 	ensureBundledApplyPatchOnPath();
 	const tracker = createExecCommandTracker();
-	const state: AdapterState = { enabled: false, cwd: process.cwd(), promptSkills: [] };
+	const state: AdapterState = { enabled: false, cwd: process.cwd(), promptSkills: [], config: readCodexConversionConfig() };
 	const sessions = createExecSessionManager();
 
 	registerOpenAICodexCustomProvider(pi, {
@@ -74,6 +53,7 @@ export default function codexConversion(pi: ExtensionAPI) {
 	registerWriteStdinTool(pi, sessions);
 	registerImageGenerationTool(pi);
 	registerWebSearchTool(pi);
+	registerCodexCommand(pi, state);
 
 	sessions.onSessionExit((sessionId) => {
 		tracker.recordSessionFinished(sessionId);
@@ -81,6 +61,9 @@ export default function codexConversion(pi: ExtensionAPI) {
 
 	pi.on("session_start", async (_event, ctx) => {
 		state.cwd = ctx.cwd;
+		state.config = readCodexConversionConfig();
+		state.promptSkills = extractPiPromptSkills(ctx.getSystemPrompt());
+		registerViewImageTool(pi, { allowOriginalDetail: supportsOriginalImageDetail(ctx.model) });
 		clearApplyPatchRenderState();
 		tracker.clear();
 		syncAdapter(pi, ctx, state);
@@ -93,6 +76,8 @@ export default function codexConversion(pi: ExtensionAPI) {
 
 	pi.on("model_select", async (_event, ctx) => {
 		state.cwd = ctx.cwd;
+		state.promptSkills = extractPiPromptSkills(ctx.getSystemPrompt());
+		registerViewImageTool(pi, { allowOriginalDetail: supportsOriginalImageDetail(ctx.model) });
 		syncAdapter(pi, ctx, state);
 	});
 
@@ -123,7 +108,7 @@ export default function codexConversion(pi: ExtensionAPI) {
 	});
 
 	pi.on("before_agent_start", async (event, ctx) => {
-		if (!isCodexLikeContext(ctx)) {
+		if (!shouldUseCodexAdapter(ctx, state.config)) {
 			return undefined;
 		}
 		const skills = resolvePromptSkills(event.systemPromptOptions?.skills, state.promptSkills);
@@ -137,10 +122,7 @@ export default function codexConversion(pi: ExtensionAPI) {
 
 	pi.on("before_provider_request", async (event, ctx) => {
 		state.cwd = ctx.cwd;
-		if (!isOpenAICodexContext(ctx)) {
-			return undefined;
-		}
-		return rewriteNativeImageGenerationTool(rewriteNativeWebSearchTool(event.payload, ctx.model), ctx.model);
+		return rewriteCodexProviderRequest(event.payload, ctx, state);
 	});
 
 	pi.on("context", async (event) => {
@@ -158,95 +140,4 @@ export default function codexConversion(pi: ExtensionAPI) {
 	});
 }
 
-export function getCodexSkillPaths(cwd: string, home: string = homedir()): string[] {
-	const skillPaths = [join(home, ".agents", "skills")];
-	let currentDir = resolve(cwd);
-	while (true) {
-		skillPaths.push(join(currentDir, ".agents", "skills"));
-		const parentDir = resolve(currentDir, "..");
-		if (parentDir === currentDir) {
-			break;
-		}
-		currentDir = parentDir;
-	}
-	return skillPaths.filter((path) => existsSync(path));
-}
-
-function syncAdapter(pi: ExtensionAPI, ctx: ExtensionContext, state: AdapterState): void {
-	state.promptSkills = extractPiPromptSkills(ctx.getSystemPrompt());
-
-	registerViewImageTool(pi, { allowOriginalDetail: supportsOriginalImageDetail(ctx.model) });
-
-	if (isCodexLikeContext(ctx)) {
-		enableAdapter(pi, ctx, state);
-	} else {
-		disableAdapter(pi, ctx, state);
-	}
-}
-
-function enableAdapter(pi: ExtensionAPI, ctx: ExtensionContext, state: AdapterState): void {
-	const toolNames = mergeAdapterTools(pi.getActiveTools(), getAdapterToolNames(ctx));
-	if (!state.enabled) {
-		// Preserve the previous active set once so switching away from Codex-like
-		// models restores the user's existing Pi tool configuration. Strip adapter
-		// tools in case a fresh session starts from persisted/mixed active tools.
-		state.previousToolNames = stripAdapterTools(pi.getActiveTools());
-		state.enabled = true;
-	}
-	pi.setActiveTools(toolNames);
-	setStatus(ctx, true);
-}
-
-function disableAdapter(pi: ExtensionAPI, ctx: ExtensionContext, state: AdapterState): void {
-	const previousToolNames = state.previousToolNames && state.previousToolNames.length > 0 ? state.previousToolNames : DEFAULT_TOOL_NAMES;
-	const restoredTools = restoreTools(previousToolNames, pi.getActiveTools());
-	if (state.enabled || hasAdapterTools(pi.getActiveTools())) {
-		pi.setActiveTools(restoredTools);
-	}
-	if (state.enabled) {
-		state.enabled = false;
-	}
-	setStatus(ctx, false);
-}
-
-function setStatus(ctx: ExtensionContext, enabled: boolean): void {
-	if (!ctx.hasUI) return;
-	ctx.ui.setStatus(STATUS_KEY, enabled ? STATUS_TEXT : undefined);
-}
-
-function getAdapterToolNames(ctx: ExtensionContext): string[] {
-	const toolNames = [...CORE_ADAPTER_TOOL_NAMES];
-	if (supportsNativeWebSearch(ctx.model)) {
-		toolNames.push(WEB_SEARCH_TOOL_NAME);
-	}
-	if (supportsNativeImageGeneration(ctx.model)) {
-		toolNames.push(IMAGE_GENERATION_TOOL_NAME);
-	}
-	if (Array.isArray(ctx.model?.input) && ctx.model.input.includes("image")) {
-		toolNames.push(VIEW_IMAGE_TOOL_NAME);
-	}
-	return toolNames;
-}
-
-export function mergeAdapterTools(activeTools: string[], adapterTools: string[]): string[] {
-	const preservedTools = activeTools.filter((toolName) => !DEFAULT_TOOL_NAMES.includes(toolName) && !ADAPTER_TOOL_NAMES.includes(toolName));
-	return [...adapterTools, ...preservedTools];
-}
-
-export function restoreTools(previousTools: string[], activeTools: string[]): string[] {
-	const restored = stripAdapterTools(previousTools);
-	for (const toolName of activeTools) {
-		if (!ADAPTER_TOOL_NAMES.includes(toolName) && !restored.includes(toolName)) {
-			restored.push(toolName);
-		}
-	}
-	return restored;
-}
-
-export function stripAdapterTools(toolNames: string[]): string[] {
-	return toolNames.filter((toolName) => !ADAPTER_TOOL_NAMES.includes(toolName));
-}
-
-function hasAdapterTools(activeTools: string[]): boolean {
-	return activeTools.some((toolName) => ADAPTER_TOOL_NAMES.includes(toolName));
-}
+export { getCodexSkillPaths, mergeAdapterTools, restoreTools, stripAdapterTools };

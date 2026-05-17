@@ -1,3 +1,8 @@
+---
+name: update-apply-patch-source
+description: Refreshes the vendored Rust apply_patch source from the local Codex checkout, rebuilds the binary, and validates the package without publishing locally.
+---
+
 # Update bundled apply_patch source
 
 Use this skill when refreshing the vendored Rust `apply_patch` source from the immutable local Codex checkout at `/home/igorw/Work/codex`.
