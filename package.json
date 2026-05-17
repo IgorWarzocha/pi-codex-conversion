@@ -33,6 +33,7 @@
     "bin/apply_patch.cmd",
     "vendor/apply-patch/**",
     "available-tools.png",
+    "CHANGELOG.md",
     "README.md",
     "LICENSE"
   ],

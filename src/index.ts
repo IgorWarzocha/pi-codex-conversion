@@ -55,6 +55,7 @@ interface AdapterState {
 
 const ADAPTER_TOOL_NAMES = [...CORE_ADAPTER_TOOL_NAMES, WEB_SEARCH_TOOL_NAME, IMAGE_GENERATION_TOOL_NAME, VIEW_IMAGE_TOOL_NAME];
 const GITHUB_URL = "https://github.com/IgorWarzocha/pi-codex-conversion";
+const CHANGELOG_URL = `${GITHUB_URL}/blob/master/CHANGELOG.md`;
 const DISCORD_URL = "https://discord.com/channels/1456806362351669492/1482388023994748948";
 const ISSUE_URL = `${GITHUB_URL}/issues/new`;
 
@@ -289,6 +290,7 @@ function registerCodexCommand(pi: ExtensionAPI, state: AdapterState): void {
 					new Text(
 						[
 							`${theme.bold("g")} github  ${theme.fg("dim", GITHUB_URL)}`,
+							`${theme.bold("c")} changes ${theme.fg("dim", CHANGELOG_URL)}`,
 							`${theme.bold("d")} discord ${theme.fg("dim", DISCORD_URL)}`,
 							`${theme.bold("i")} issue   ${theme.fg("dim", ISSUE_URL)}`,
 						].join("\n"),
@@ -312,6 +314,11 @@ function registerCodexCommand(pi: ExtensionAPI, state: AdapterState): void {
 						if (data === "d") {
 							openExternalUrl(DISCORD_URL);
 							ctx.ui.notify("Opened Discord", "info");
+							return;
+						}
+						if (data === "c") {
+							openExternalUrl(CHANGELOG_URL);
+							ctx.ui.notify("Opened changelog", "info");
 							return;
 						}
 						if (data === "i") {
