@@ -15,7 +15,7 @@ on:
         default: false
 
 permissions:
-  contents: read
+  contents: write
   id-token: write
 
 concurrency:
@@ -57,6 +57,8 @@ jobs:
     steps:
       - name: Checkout package
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -139,6 +141,45 @@ jobs:
       - name: Publish latest tag
         if: github.event_name == 'push' && (github.ref_name == 'main' || github.ref_name == 'master')
         run: npm publish --tag latest --access public
+
+      - name: Prepare GitHub release notes
+        id: release
+        if: github.event_name == 'push' && (github.ref_name == 'main' || github.ref_name == 'master')
+        run: node .github/scripts/prepare-github-release.mjs
+
+      - name: Tag published commit
+        if: github.event_name == 'push' && (github.ref_name == 'main' || github.ref_name == 'master')
+        shell: bash
+        run: |
+          tag="${{ steps.release.outputs.tag }}"
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
+            tag_sha="$(git ls-remote origin "refs/tags/$tag^{}" | awk '{print $1}')"
+            if [ -z "$tag_sha" ]; then
+              tag_sha="$(git ls-remote origin "refs/tags/$tag" | awk '{print $1}')"
+            fi
+            if [ "$tag_sha" != "$GITHUB_SHA" ]; then
+              echo "Tag $tag already exists at $tag_sha, not $GITHUB_SHA" >&2
+              exit 1
+            fi
+            echo "Tag $tag already exists at this commit; leaving it untouched."
+          else
+            git tag -a "$tag" -m "$tag"
+            git push origin "$tag"
+          fi
+
+      - name: Create or update GitHub release
+        if: github.event_name == 'push' && (github.ref_name == 'main' || github.ref_name == 'master')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          tag="${{ steps.release.outputs.tag }}"
+          title="${{ steps.release.outputs.tag }}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release edit "$tag" --title "$title" --notes-file release-notes.md --latest
+          else
+            gh release create "$tag" --title "$title" --notes-file release-notes.md --latest --verify-tag
+          fi
 
       - name: Publish manual run
         if: github.event_name == 'workflow_dispatch' && inputs.publish
