@@ -1,4 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { DynamicBorder, getSettingsListTheme } from "@earendil-works/pi-coding-agent";
+import { Box, Container, SettingsList, Spacer, Text, type SettingItem } from "@earendil-works/pi-tui";
+import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
@@ -8,10 +11,18 @@ import {
 	DEFAULT_TOOL_NAMES,
 	IMAGE_GENERATION_TOOL_NAME,
 	STATUS_KEY,
-	STATUS_TEXT,
+	buildStatusText,
 	VIEW_IMAGE_TOOL_NAME,
 	WEB_SEARCH_TOOL_NAME,
 } from "./adapter/tool-set.ts";
+import {
+	applyCodexRequestParams,
+	DEFAULT_CODEX_CONVERSION_CONFIG,
+	normalizeCodexVerbosity,
+	readCodexConversionConfig,
+	writeCodexConversionConfig,
+	type CodexConversionConfig,
+} from "./adapter/config.ts";
 import { clearApplyPatchRenderState, registerApplyPatchTool } from "./tools/apply-patch-tool.ts";
 import { isCodexLikeContext, isOpenAICodexContext } from "./adapter/codex-model.ts";
 import { createExecCommandTracker } from "./tools/exec-command-state.ts";
@@ -39,9 +50,13 @@ interface AdapterState {
 	cwd: string;
 	previousToolNames?: string[];
 	promptSkills: PromptSkill[];
+	config: CodexConversionConfig;
 }
 
 const ADAPTER_TOOL_NAMES = [...CORE_ADAPTER_TOOL_NAMES, WEB_SEARCH_TOOL_NAME, IMAGE_GENERATION_TOOL_NAME, VIEW_IMAGE_TOOL_NAME];
+const GITHUB_URL = "https://github.com/IgorWarzocha/pi-codex-conversion";
+const DISCORD_URL = "https://discord.com/channels/1456806362351669492/1482388023994748948";
+const ISSUE_URL = `${GITHUB_URL}/issues/new`;
 
 function getCommandArg(args: unknown): string | undefined {
 	if (!args || typeof args !== "object" || !("cmd" in args) || typeof args.cmd !== "string") {
@@ -63,7 +78,7 @@ function isToolCallOnlyAssistantMessage(message: unknown): boolean {
 export default function codexConversion(pi: ExtensionAPI) {
 	ensureBundledApplyPatchOnPath();
 	const tracker = createExecCommandTracker();
-	const state: AdapterState = { enabled: false, cwd: process.cwd(), promptSkills: [] };
+	const state: AdapterState = { enabled: false, cwd: process.cwd(), promptSkills: [], config: readCodexConversionConfig() };
 	const sessions = createExecSessionManager();
 
 	registerOpenAICodexCustomProvider(pi, {
@@ -74,6 +89,7 @@ export default function codexConversion(pi: ExtensionAPI) {
 	registerWriteStdinTool(pi, sessions);
 	registerImageGenerationTool(pi);
 	registerWebSearchTool(pi);
+	registerCodexCommand(pi, state);
 
 	sessions.onSessionExit((sessionId) => {
 		tracker.recordSessionFinished(sessionId);
@@ -81,6 +97,7 @@ export default function codexConversion(pi: ExtensionAPI) {
 
 	pi.on("session_start", async (_event, ctx) => {
 		state.cwd = ctx.cwd;
+		state.config = readCodexConversionConfig();
 		clearApplyPatchRenderState();
 		tracker.clear();
 		syncAdapter(pi, ctx, state);
@@ -140,7 +157,11 @@ export default function codexConversion(pi: ExtensionAPI) {
 		if (!isOpenAICodexContext(ctx)) {
 			return undefined;
 		}
-		return rewriteNativeImageGenerationTool(rewriteNativeWebSearchTool(event.payload, ctx.model), ctx.model);
+		const webSearchPayload = state.config.webSearch ? rewriteNativeWebSearchTool(event.payload, ctx.model) : event.payload;
+		const imageGenerationPayload = state.config.imageGeneration
+			? rewriteNativeImageGenerationTool(webSearchPayload, ctx.model)
+			: webSearchPayload;
+		return applyCodexRequestParams(imageGenerationPayload, state.config);
 	});
 
 	pi.on("context", async (event) => {
@@ -172,6 +193,135 @@ export function getCodexSkillPaths(cwd: string, home: string = homedir()): strin
 	return skillPaths.filter((path) => existsSync(path));
 }
 
+function registerCodexCommand(pi: ExtensionAPI, state: AdapterState): void {
+	function saveAndApply(ctx: ExtensionContext, nextConfig: CodexConversionConfig): void {
+		state.config = nextConfig;
+		writeCodexConversionConfig(nextConfig);
+		syncAdapter(pi, ctx, state);
+	}
+
+	pi.registerCommand("codex", {
+		description: "Configure Codex adapter settings",
+		getArgumentCompletions: (prefix) =>
+			["fast", "search", "image", "low", "medium", "high"]
+				.filter((item) => item.startsWith(prefix.trim().toLowerCase()))
+				.map((value) => ({ label: value, value })),
+		handler: async (args, ctx) => {
+			state.config = readCodexConversionConfig();
+			const arg = args.trim().toLowerCase();
+
+			if (arg === "fast") {
+				const nextConfig = { ...state.config, fast: !state.config.fast };
+				saveAndApply(ctx, nextConfig);
+				ctx.ui.notify(`Codex fast mode ${nextConfig.fast ? "enabled" : "disabled"}`, "info");
+				return;
+			}
+
+			if (arg === "search") {
+				const nextConfig = { ...state.config, webSearch: !state.config.webSearch };
+				saveAndApply(ctx, nextConfig);
+				ctx.ui.notify(`Codex web search ${nextConfig.webSearch ? "enabled" : "disabled"}`, "info");
+				return;
+			}
+
+			if (arg === "image") {
+				const nextConfig = { ...state.config, imageGeneration: !state.config.imageGeneration };
+				saveAndApply(ctx, nextConfig);
+				ctx.ui.notify(`Codex image generation ${nextConfig.imageGeneration ? "enabled" : "disabled"}`, "info");
+				return;
+			}
+
+			const verbosity = normalizeCodexVerbosity(arg);
+			if (verbosity) {
+				const nextConfig = { ...state.config, verbosity };
+				saveAndApply(ctx, nextConfig);
+				ctx.ui.notify(`Codex verbosity set to ${verbosity}`, "info");
+				return;
+			}
+
+			if (arg) {
+				ctx.ui.notify("Usage: /codex, /codex fast, /codex search, /codex image, /codex low|medium|high", "warning");
+				return;
+			}
+
+			if (!ctx.hasUI) {
+				ctx.ui.notify(`Codex settings: fast ${state.config.fast ? "on" : "off"}, web search ${state.config.webSearch ? "on" : "off"}, image generation ${state.config.imageGeneration ? "on" : "off"}, verbosity ${state.config.verbosity}`, "info");
+				return;
+			}
+
+			let draft = { ...state.config };
+			await ctx.ui.custom<void>((tui, theme, _kb, done) => {
+				const buildItems = (): SettingItem[] => [
+					{ id: "fast", label: "Fast mode", currentValue: draft.fast ? "on" : "off", values: ["off", "on"] },
+					{ id: "webSearch", label: "Web search", currentValue: draft.webSearch ? "on" : "off", values: ["off", "on"] },
+					{ id: "imageGeneration", label: "Image generation", currentValue: draft.imageGeneration ? "on" : "off", values: ["off", "on"] },
+					{ id: "verbosity", label: "Verbosity", currentValue: draft.verbosity, values: ["low", "medium", "high"] },
+				];
+
+				const container = new Container();
+				const panel = new Box(1, 0);
+				panel.addChild(new DynamicBorder((text) => theme.fg("accent", text)));
+				let settingsList: SettingsList;
+				settingsList = new SettingsList(buildItems(), 5, getSettingsListTheme(), (id, value) => {
+					if (id === "fast") draft.fast = value === "on";
+					if (id === "webSearch") draft.webSearch = value === "on";
+					if (id === "imageGeneration") draft.imageGeneration = value === "on";
+					if (id === "verbosity") draft.verbosity = normalizeCodexVerbosity(value) ?? DEFAULT_CODEX_CONVERSION_CONFIG.verbosity;
+					saveAndApply(ctx, draft);
+					tui.requestRender();
+				}, () => done(undefined));
+				panel.addChild(settingsList);
+				panel.addChild(new DynamicBorder((text) => theme.fg("dim", text)));
+				panel.addChild(
+					new Text(
+						[
+							`${theme.bold("g")} github  ${theme.fg("dim", GITHUB_URL)}`,
+							`${theme.bold("d")} discord ${theme.fg("dim", DISCORD_URL)}`,
+							`${theme.bold("i")} issue   ${theme.fg("dim", ISSUE_URL)}`,
+						].join("\n"),
+						0,
+						0,
+					),
+				);
+				panel.addChild(new DynamicBorder((text) => theme.fg("accent", text)));
+				container.addChild(new Spacer(1));
+				container.addChild(panel);
+
+				return {
+					render: (width: number) => container.render(width),
+					invalidate: () => container.invalidate(),
+					handleInput: (data: string) => {
+						if (data === "g") {
+							openExternalUrl(GITHUB_URL);
+							ctx.ui.notify("Opened GitHub", "info");
+							return;
+						}
+						if (data === "d") {
+							openExternalUrl(DISCORD_URL);
+							ctx.ui.notify("Opened Discord", "info");
+							return;
+						}
+						if (data === "i") {
+							openExternalUrl(ISSUE_URL);
+							ctx.ui.notify("Opened issue form", "info");
+							return;
+						}
+						settingsList.handleInput?.(data);
+						tui.requestRender();
+					},
+				};
+			});
+		},
+	});
+}
+
+function openExternalUrl(url: string): void {
+	const command = process.platform === "darwin" ? "open" : process.platform === "win32" ? "cmd" : "xdg-open";
+	const args = process.platform === "win32" ? ["/c", "start", "", url] : [url];
+	const child = spawn(command, args, { detached: true, stdio: "ignore" });
+	child.unref();
+}
+
 function syncAdapter(pi: ExtensionAPI, ctx: ExtensionContext, state: AdapterState): void {
 	state.promptSkills = extractPiPromptSkills(ctx.getSystemPrompt());
 
@@ -185,7 +335,7 @@ function syncAdapter(pi: ExtensionAPI, ctx: ExtensionContext, state: AdapterStat
 }
 
 function enableAdapter(pi: ExtensionAPI, ctx: ExtensionContext, state: AdapterState): void {
-	const toolNames = mergeAdapterTools(pi.getActiveTools(), getAdapterToolNames(ctx));
+	const toolNames = mergeAdapterTools(pi.getActiveTools(), getAdapterToolNames(ctx, state.config));
 	if (!state.enabled) {
 		// Preserve the previous active set once so switching away from Codex-like
 		// models restores the user's existing Pi tool configuration. Strip adapter
@@ -194,7 +344,7 @@ function enableAdapter(pi: ExtensionAPI, ctx: ExtensionContext, state: AdapterSt
 		state.enabled = true;
 	}
 	pi.setActiveTools(toolNames);
-	setStatus(ctx, true);
+	setStatus(ctx, true, state.config);
 }
 
 function disableAdapter(pi: ExtensionAPI, ctx: ExtensionContext, state: AdapterState): void {
@@ -206,20 +356,20 @@ function disableAdapter(pi: ExtensionAPI, ctx: ExtensionContext, state: AdapterS
 	if (state.enabled) {
 		state.enabled = false;
 	}
-	setStatus(ctx, false);
+	setStatus(ctx, false, state.config);
 }
 
-function setStatus(ctx: ExtensionContext, enabled: boolean): void {
+function setStatus(ctx: ExtensionContext, enabled: boolean, config: CodexConversionConfig): void {
 	if (!ctx.hasUI) return;
-	ctx.ui.setStatus(STATUS_KEY, enabled ? STATUS_TEXT : undefined);
+	ctx.ui.setStatus(STATUS_KEY, enabled ? buildStatusText(config) : undefined);
 }
 
-function getAdapterToolNames(ctx: ExtensionContext): string[] {
+function getAdapterToolNames(ctx: ExtensionContext, config: CodexConversionConfig): string[] {
 	const toolNames = [...CORE_ADAPTER_TOOL_NAMES];
-	if (supportsNativeWebSearch(ctx.model)) {
+	if (config.webSearch && supportsNativeWebSearch(ctx.model)) {
 		toolNames.push(WEB_SEARCH_TOOL_NAME);
 	}
-	if (supportsNativeImageGeneration(ctx.model)) {
+	if (config.imageGeneration && supportsNativeImageGeneration(ctx.model)) {
 		toolNames.push(IMAGE_GENERATION_TOOL_NAME);
 	}
 	if (Array.isArray(ctx.model?.input) && ctx.model.input.includes("image")) {

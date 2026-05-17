@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { applyCodexRequestParams } from "../src/adapter/config.ts";
+import { buildStatusText } from "../src/adapter/tool-set.ts";
 import { getCodexSkillPaths, mergeAdapterTools, restoreTools, stripAdapterTools } from "../src/index.ts";
 
 test("mergeAdapterTools replaces Pi core tools but preserves unrelated active tools", () => {
@@ -40,6 +42,28 @@ test("stripAdapterTools removes every adapter-owned tool", () => {
 	assert.deepEqual(
 		stripAdapterTools(["read", "exec_command", "write_stdin", "apply_patch", "web_search", "image_generation", "view_image", "parallel"]),
 		["read", "parallel"],
+	);
+});
+
+test("buildStatusText includes verbosity plus enabled web search and fast flags", () => {
+	assert.equal(
+		buildStatusText({ verbosity: "medium", webSearch: true, imageGeneration: true, fast: true }),
+		"\u001b[38;2;0;76;255mCodex adapter\u001b[0m V: mid • web search • image gen • fast",
+	);
+	assert.equal(
+		buildStatusText({ verbosity: "low", webSearch: false, imageGeneration: false, fast: false }),
+		"\u001b[38;2;0;76;255mCodex adapter\u001b[0m V: low",
+	);
+});
+
+test("applyCodexRequestParams patches verbosity and priority service tier", () => {
+	assert.deepEqual(
+		applyCodexRequestParams({ input: "hello", text: { format: { type: "text" } } }, { fast: true, imageGeneration: true, webSearch: true, verbosity: "high" }),
+		{
+			input: "hello",
+			service_tier: "priority",
+			text: { format: { type: "text" }, verbosity: "high" },
+		},
 	);
 });
 
