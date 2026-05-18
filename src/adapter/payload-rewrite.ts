@@ -512,6 +512,7 @@ function buildNativeReplaySegmentsInternal<TApi extends Api>(args: {
 			replayInput: [
 				...freshPreamble.leadingInput,
 				...compactedWindow,
+				...actualPreCompactionKeptWindow,
 				...actualPostCompactionTail,
 				...freshPreamble.trailingInput,
 			],
@@ -522,6 +523,7 @@ function buildNativeReplaySegmentsInternal<TApi extends Api>(args: {
 			input: [
 				...freshPreamble.leadingInput,
 				...compactedWindow,
+				...actualPreCompactionKeptWindow,
 				...actualPostCompactionTail,
 				...freshPreamble.trailingInput,
 			],

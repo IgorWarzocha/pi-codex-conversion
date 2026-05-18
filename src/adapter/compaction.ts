@@ -28,6 +28,11 @@ function cloneCompactedWindow(window: readonly unknown[]): ResponsesInputItem[] 
 	return window.map((item) => structuredClone(item));
 }
 
+function findEntryIndexByIdBeforeBoundary(entries: readonly { id: string }[], entryId: string, boundaryIndex: number): number | undefined {
+	const index = entries.findIndex((entry, candidateIndex) => candidateIndex < boundaryIndex && entry.id === entryId);
+	return index >= 0 ? index : undefined;
+}
+
 function buildCompactionInstructions(systemPrompt: string, customInstructions?: string): string {
 	const guidance = customInstructions?.trim();
 	return guidance ? `${systemPrompt}\n\nAdditional user guidance for this manual /compact request:\n${guidance}` : systemPrompt;
@@ -101,11 +106,19 @@ export async function handleCodexSessionBeforeCompact(event: SessionBeforeCompac
 	if (latestNativeCompaction.ok) {
 		const compactedWindow = cloneCompactedWindow(latestNativeCompaction.entry.details?.compactedWindow ?? []);
 		if (!compactedWindow) return undefined;
+		const previousKeptStartIndex = findEntryIndexByIdBeforeBoundary(
+			branchEntries,
+			latestNativeCompaction.entry.firstKeptEntryId,
+			latestNativeCompaction.index,
+		);
+		if (previousKeptStartIndex === undefined) return undefined;
+		const previousKeptEntries = branchEntries.slice(previousKeptStartIndex, latestNativeCompaction.index);
 		const liveTailEntries = branchEntries.slice(latestNativeCompaction.index + 1);
 		request = {
 			model: runtime.currentModel.id,
 			input: [
 				...compactedWindow,
+				...serializeLiveTailToResponsesInput({ model: runtime.currentModel, entries: previousKeptEntries }),
 				...serializeLiveTailToResponsesInput({ model: runtime.currentModel, entries: liveTailEntries }),
 			],
 			instructions: buildCompactionInstructions(ctx.getSystemPrompt(), event.customInstructions),
