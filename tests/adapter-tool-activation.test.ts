@@ -3,10 +3,11 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { applyCodexRequestParams, getCodexConversionConfigPath, writeCodexConversionConfig } from "../src/adapter/config.ts";
+import { DEFAULT_CODEX_CONVERSION_CONFIG, applyCodexRequestParams, getCodexConversionConfigPath, writeCodexConversionConfig } from "../src/adapter/config.ts";
 import { syncAdapter } from "../src/adapter/activation.ts";
 import type { AdapterState } from "../src/adapter/state.ts";
 import { buildStatusText } from "../src/adapter/tool-set.ts";
+import { hasNoSkillsFlag } from "../src/adapter/skills.ts";
 import { getCodexSkillPaths, mergeAdapterTools, restoreTools, stripAdapterTools } from "../src/index.ts";
 
 function createToolHarness(activeTools: string[]) {
@@ -24,7 +25,7 @@ function createAdapterState(overrides: Partial<AdapterState["config"]> = {}): Ad
 		enabled: false,
 		cwd: process.cwd(),
 		promptSkills: [],
-		config: { fast: false, imageGeneration: false, statusLine: true, useOnAllModels: false, webSearch: false, verbosity: "low", ...overrides },
+		config: { ...DEFAULT_CODEX_CONVERSION_CONFIG, imageGeneration: false, webSearch: false, ...overrides },
 	};
 }
 
@@ -72,6 +73,26 @@ test("syncAdapter preserves disabled optional tools across repeated syncs", () =
 	assert.deepEqual(pi.activeTools(), ["exec_command", "write_stdin", "apply_patch", "web_search", "image_generation", "parallel"]);
 });
 
+test("syncAdapter can add only apply_patch while preserving the default toolkit", () => {
+	const pi = createToolHarness(["read", "bash", "edit", "write", "web_search", "image_generation", "parallel"]);
+	const ctx = createContext({ provider: "openai", api: "openai-responses", id: "gpt-5" });
+	const state = createAdapterState({ applyPatchOnly: true, webSearch: true, imageGeneration: true });
+
+	syncAdapter(pi as never, ctx as never, state);
+
+	assert.deepEqual(pi.activeTools(), ["read", "bash", "edit", "write", "web_search", "parallel", "apply_patch"]);
+});
+
+test("syncAdapter does not add apply_patch only mode outside GPT/Codex models", () => {
+	const pi = createToolHarness(["read", "bash", "edit", "write", "parallel"]);
+	const ctx = createContext({ provider: "anthropic", api: "anthropic-messages", id: "claude" });
+	const state = createAdapterState({ applyPatchOnly: true, webSearch: true, imageGeneration: true });
+
+	syncAdapter(pi as never, ctx as never, state);
+
+	assert.deepEqual(pi.activeTools(), ["read", "bash", "edit", "write", "parallel"]);
+});
+
 test("syncAdapter restores preserved disabled optional tools when disabling adapter", () => {
 	const pi = createToolHarness(["read", "web_search", "parallel"]);
 	const codexCtx = createContext({ provider: "openai", api: "openai-responses", id: "gpt-5" });
@@ -93,7 +114,7 @@ test("restoreTools restores previous tools and keeps custom tools added while ad
 
 test("restoreTools strips adapter tools from mixed startup state while keeping unrelated tools", () => {
 	assert.deepEqual(
-		restoreTools(["read", "bash", "edit", "write"], ["read", "bash", "edit", "write", "apply_patch", "exec_command", "write_stdin", "web_search", "image_generation", "parallel"]),
+		restoreTools(["read", "bash", "edit", "write"], ["read", "bash", "edit", "write", "apply_patch", "exec_command", "write_stdin", "web.run", "image_generation", "parallel"]),
 		["read", "bash", "edit", "write", "parallel"],
 	);
 });
@@ -110,7 +131,7 @@ test("restoreTools strips adapter tools from the preserved previous tool set", (
 
 test("stripAdapterTools removes every adapter-owned tool", () => {
 	assert.deepEqual(
-		stripAdapterTools(["read", "exec_command", "write_stdin", "apply_patch", "web_search", "image_generation", "view_image", "parallel"]),
+		stripAdapterTools(["read", "exec_command", "write_stdin", "apply_patch", "web.run", "image_generation", "view_image", "parallel"]),
 		["read", "parallel"],
 	);
 });
@@ -135,11 +156,15 @@ test("buildStatusText includes verbosity plus enabled web search and fast flags"
 		buildStatusText({ webSearch: false, imageGeneration: false, fast: false, useOnAllModels: true }),
 		"\u001b[38;2;0;76;255mCodex adapter\u001b[0m • all models",
 	);
+	assert.equal(
+		buildStatusText({ verbosity: "high", webSearch: false, imageGeneration: false, fast: false, useOnAllModels: false, compaction: { enabled: true, model: "gpt-5.4-mini", reasoning: "low" } }),
+		"\u001b[38;2;0;76;255mCodex adapter\u001b[0m V: hi • compact gpt-5.4-mini/low",
+	);
 });
 
 test("applyCodexRequestParams patches verbosity and priority service tier", () => {
 	assert.deepEqual(
-		applyCodexRequestParams({ input: "hello", text: { format: { type: "text" } } }, { fast: true, imageGeneration: true, statusLine: true, useOnAllModels: false, webSearch: true, verbosity: "high" }),
+		applyCodexRequestParams({ input: "hello", text: { format: { type: "text" } } }, { ...DEFAULT_CODEX_CONVERSION_CONFIG, fast: true, imageGeneration: true, statusLine: true, useOnAllModels: false, webSearch: true, verbosity: "high" }),
 		{
 			input: "hello",
 			service_tier: "priority",
@@ -152,7 +177,7 @@ test("applyCodexRequestParams can apply verbosity without priority service tier"
 	assert.deepEqual(
 		applyCodexRequestParams(
 			{ input: "hello" },
-			{ fast: true, imageGeneration: true, statusLine: true, useOnAllModels: true, webSearch: true, verbosity: "medium" },
+			{ ...DEFAULT_CODEX_CONVERSION_CONFIG, fast: true, imageGeneration: true, statusLine: true, useOnAllModels: true, webSearch: true, verbosity: "medium" },
 			{ serviceTier: false, verbosity: true },
 		),
 		{ input: "hello", text: { verbosity: "medium" } },
@@ -169,7 +194,7 @@ test("writeCodexConversionConfig reports write failures", () => {
 		const blockedPath = join(root, "blocked");
 		writeFileSync(blockedPath, "not a directory");
 		const result = writeCodexConversionConfig(
-			{ fast: false, imageGeneration: true, statusLine: true, useOnAllModels: false, webSearch: true, verbosity: "low" },
+			{ ...DEFAULT_CODEX_CONVERSION_CONFIG, fast: false, imageGeneration: true, statusLine: true, useOnAllModels: false, webSearch: true, verbosity: "low" },
 			join(blockedPath, "pi-codex-conversion.json"),
 		);
 		assert.equal(result.ok, false);
@@ -183,7 +208,7 @@ test("writeCodexConversionConfig reports successful writes", () => {
 	try {
 		const configPath = join(root, "pi-codex-conversion.json");
 		const result = writeCodexConversionConfig(
-			{ fast: true, imageGeneration: false, statusLine: false, useOnAllModels: true, webSearch: false, verbosity: "high" },
+			{ ...DEFAULT_CODEX_CONVERSION_CONFIG, fast: true, imageGeneration: false, statusLine: false, useOnAllModels: true, webSearch: false, verbosity: "high" },
 			configPath,
 		);
 		assert.equal(result.ok, true);
@@ -210,4 +235,11 @@ test("getCodexSkillPaths discovers existing global and ancestor project Codex sk
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
+});
+
+test("hasNoSkillsFlag recognizes Pi no-skills CLI flags", () => {
+	assert.equal(hasNoSkillsFlag(["node", "pi", "--no-skills"]), true);
+	assert.equal(hasNoSkillsFlag(["node", "pi", "-ns"]), true);
+	assert.equal(hasNoSkillsFlag(["node", "pi", "--", "--no-skills"]), false);
+	assert.equal(hasNoSkillsFlag(["node", "pi"]), false);
 });

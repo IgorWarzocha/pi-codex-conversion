@@ -1,26 +1,27 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Box, Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { getCodexRuntimeShell } from "./adapter/runtime-shell.ts";
 import { clearApplyPatchRenderState, registerApplyPatchTool } from "./tools/apply-patch-tool.ts";
 import { createExecCommandTracker } from "./tools/exec-command-state.ts";
 import { registerExecCommandTool } from "./tools/exec-command-tool.ts";
 import { createExecSessionManager } from "./tools/exec-session-manager.ts";
-import {
-	IMAGE_SAVE_DISPLAY_MESSAGE_TYPE,
-	WEB_SEARCH_ACTIVITY_MESSAGE_TYPE,
-	registerOpenAICodexCustomProvider,
-} from "./providers/openai-codex-custom-provider.ts";
+import { registerOpenAICodexCustomProvider } from "./providers/openai-codex-custom-provider.ts";
 import { registerImageGenerationTool } from "./tools/image-generation-tool.ts";
 import { buildCodexSystemPrompt, extractPiPromptSkills, resolvePromptSkills } from "./prompt/build-system-prompt.ts";
 import { registerViewImageTool, supportsOriginalImageDetail } from "./tools/view-image-tool.ts";
-import { registerWebSearchTool, WEB_SEARCH_SESSION_NOTE_TYPE } from "./tools/web-search-tool.ts";
+import { registerWebSearchTool } from "./tools/web-search-tool.ts";
 import { registerWriteStdinTool } from "./tools/write-stdin-tool.ts";
 import { ensureBundledApplyPatchOnPath } from "./tools/apply-patch-binary.ts";
 import { readCodexConversionConfig } from "./adapter/config.ts";
 import { syncAdapter, mergeAdapterTools, restoreTools, stripAdapterTools, shouldUseCodexAdapter } from "./adapter/activation.ts";
 import { rewriteCodexProviderRequest } from "./adapter/provider-request.ts";
-import { getCodexSkillPaths } from "./adapter/skills.ts";
+import { handleCodexSessionBeforeCompact } from "./adapter/compaction.ts";
+import { isNativeCompactionDetails, NATIVE_COMPACTION_DISPLAY_MESSAGE_TYPE, NATIVE_COMPACTION_DISPLAY_TEXT } from "./adapter/types.ts";
+import { isAdapterContextExcludedCustomMessage } from "./adapter/context-filter.ts";
+import { getCodexSkillPaths, hasNoSkillsFlag } from "./adapter/skills.ts";
 import type { AdapterState } from "./adapter/state.ts";
 import { registerCodexCommand } from "./codex-settings/command.ts";
+import { WEB_SEARCH_TOOL_NAME } from "./adapter/tool-set.ts";
 
 function getCommandArg(args: unknown): string | undefined {
 	if (!args || typeof args !== "object" || !("cmd" in args) || typeof args.cmd !== "string") {
@@ -44,13 +45,16 @@ export default function codexConversion(pi: ExtensionAPI) {
 	const tracker = createExecCommandTracker();
 	const state: AdapterState = { enabled: false, cwd: process.cwd(), promptSkills: [], config: readCodexConversionConfig() };
 	const sessions = createExecSessionManager();
-	let nativeWebSearchRegistered = false;
+	const registeredNativeWebSearchTools = new Set<string>();
 	let nativeImageGenerationRegistered = false;
 
 	function ensureOptionalNativeToolsRegistered(config = state.config): void {
-		if (config.webSearch && !nativeWebSearchRegistered) {
-			registerWebSearchTool(pi);
-			nativeWebSearchRegistered = true;
+		if (config.webSearch) {
+			const webSearchToolName = WEB_SEARCH_TOOL_NAME;
+			if (!registeredNativeWebSearchTools.has(webSearchToolName)) {
+				registerWebSearchTool(pi, webSearchToolName);
+				registeredNativeWebSearchTools.add(webSearchToolName);
+			}
 		}
 		if (config.imageGeneration && !nativeImageGenerationRegistered) {
 			registerImageGenerationTool(pi);
@@ -66,6 +70,16 @@ export default function codexConversion(pi: ExtensionAPI) {
 	registerWriteStdinTool(pi, sessions);
 	ensureOptionalNativeToolsRegistered();
 	registerCodexCommand(pi, state, ensureOptionalNativeToolsRegistered);
+
+	pi.registerMessageRenderer(NATIVE_COMPACTION_DISPLAY_MESSAGE_TYPE, (message, _options, theme) => {
+		const box = new Box(1, 1, (text) => theme.bg("customMessageBg", text));
+		box.addChild(new Text(theme.fg("customMessageLabel", theme.bold("[compaction]")), 0, 0));
+		const content = typeof message.content === "string" ? message.content : NATIVE_COMPACTION_DISPLAY_TEXT;
+		box.addChild(new Text(`\n${theme.fg("customMessageText", content)}`, 0, 0));
+		const render = box.render.bind(box);
+		box.render = (width) => render(width).map((line) => truncateToWidth(line, width, ""));
+		return box;
+	});
 
 	sessions.onSessionExit((sessionId) => {
 		tracker.recordSessionFinished(sessionId);
@@ -83,6 +97,7 @@ export default function codexConversion(pi: ExtensionAPI) {
 	});
 
 	pi.on("resources_discover", async (event) => {
+		if (hasNoSkillsFlag()) return undefined;
 		const skillPaths = getCodexSkillPaths(event.cwd);
 		return skillPaths.length > 0 ? { skillPaths } : undefined;
 	});
@@ -124,7 +139,7 @@ export default function codexConversion(pi: ExtensionAPI) {
 		if (!shouldUseCodexAdapter(ctx, state.config)) {
 			return undefined;
 		}
-		const skills = resolvePromptSkills(event.systemPromptOptions?.skills, state.promptSkills);
+		const skills = resolvePromptSkills(event.systemPromptOptions?.skills, hasNoSkillsFlag() ? [] : state.promptSkills);
 		return {
 			systemPrompt: buildCodexSystemPrompt(event.systemPrompt, {
 				skills,
@@ -138,19 +153,25 @@ export default function codexConversion(pi: ExtensionAPI) {
 		return rewriteCodexProviderRequest(event.payload, ctx, state);
 	});
 
-	pi.on("context", async (event) => {
-		return {
-			messages: event.messages.filter(
-				(message) =>
-					!(
-						message.role === "custom" &&
-						(message.customType === WEB_SEARCH_SESSION_NOTE_TYPE ||
-							message.customType === WEB_SEARCH_ACTIVITY_MESSAGE_TYPE ||
-							message.customType === IMAGE_SAVE_DISPLAY_MESSAGE_TYPE)
-					),
-			),
-		};
+	pi.on("session_before_compact", async (event, ctx) => {
+		state.cwd = ctx.cwd;
+		return handleCodexSessionBeforeCompact(event, ctx, state, pi);
 	});
+
+	pi.on("session_compact", async (event) => {
+		if (!event.fromExtension || !isNativeCompactionDetails(event.compactionEntry.details)) return;
+		pi.sendMessage(
+			{
+				customType: NATIVE_COMPACTION_DISPLAY_MESSAGE_TYPE,
+				content: NATIVE_COMPACTION_DISPLAY_TEXT,
+				display: true,
+				details: { compactionEntryId: event.compactionEntry.id },
+			},
+			{ triggerTurn: false },
+		);
+	});
+
+	pi.on("context", async (event) => ({ messages: event.messages.filter((message) => !isAdapterContextExcludedCustomMessage(message)) }));
 }
 
 export { getCodexSkillPaths, mergeAdapterTools, restoreTools, stripAdapterTools };

@@ -26,7 +26,7 @@ When the adapter is active, the LLM sees these tools:
 - `exec_command` — shell execution with Codex-style `cmd` parameters and resumable sessions
 - `write_stdin` — continue or poll a running exec session
 - `apply_patch` — patch tool
-- `web_search` — native OpenAI Codex Responses web search, enabled only on the `openai-codex` provider
+- `web.run` — native OpenAI Codex Responses web search, enabled only on the `openai-codex` provider
 - `image_generation` — native OpenAI Codex Responses image generation, enabled only on image-capable `openai-codex` models
 - `view_image` — image-only wrapper around Pi's native image reading, enabled only for image-capable models
 
@@ -49,6 +49,10 @@ Use `/codex` to change adapter settings.
 - `/codex low`, `/codex medium`, `/codex high` — set Responses API verbosity
 
 Settings are saved globally in `~/.pi/agent/pi-codex-conversion.json`.
+
+The settings UI also has an **Overrides** tab. These options intentionally do not have `/codex ...` command shortcuts:
+
+- add only the Pi `apply_patch` tool for GPT/Codex models while keeping Pi's default toolkit, prompt, provider behavior, and compaction flow
 
 When `all` is on, non-Codex providers get the shell, patch, skill, and prompt-adapter behavior, but keep their normal Pi provider path. Native web search, native image generation, and priority service tier stay limited to the OpenAI Codex provider. Verbosity is applied to Responses API providers.
 
@@ -83,7 +87,7 @@ Raw command output is still available by expanding the tool result.
 - `exec_command` and `write_stdin` use a PTY-backed session manager for interactive commands and long-running processes.
 - `apply_patch` accepts absolute paths as-is and resolves relative paths against the current working directory.
 - Shell `apply_patch` is also available inside `exec_command`, but the dedicated `apply_patch` tool is preferred unless you are chaining edits with other shell steps.
-- Native `web_search` and `image_generation` are forwarded to OpenAI Codex Responses tools rather than executed as local function tools.
+- Native `web.run` and `image_generation` are forwarded to OpenAI Codex Responses tools rather than executed as local function tools.
 
 ## Development checkout
 

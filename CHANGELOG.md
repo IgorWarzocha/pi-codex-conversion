@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.5.6
+
+- Added Compaction and Overrides tabs to `/codex`.
+- Added optional native Responses compaction for Codex sessions, with settings for compaction model and reasoning.
+- Added an `apply_patch`-only override mode for GPT/Codex models. This mode bypasses most of this extension, but still gives you the `apply_patch` tool.
+- Renamed the native Codex web search tool from `web_search` to responses-native `web.run`, allowing compatibility with other extensions.
+- Synced the custom OpenAI Codex provider and Pi development dependencies with Pi `0.75.3`.
+
 ## 1.5.5
 
 - Avoid registering disabled native `web_search` and `image_generation` tools so other extensions can own those names.
