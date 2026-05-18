@@ -77,7 +77,7 @@ function formatCompactionNotes(theme: Theme): string[] {
 
 function formatOverridesNotes(theme: Theme): string[] {
 	return [
-		theme.fg("dim", "  Advanced tool-surface overrides. No /codex subcommands are provided for these."),
+		theme.fg("dim", "  Advanced tool-surface overrides."),
 	];
 }
 
