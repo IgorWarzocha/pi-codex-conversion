@@ -106,6 +106,17 @@ export async function handleCodexSessionBeforeCompact(event: SessionBeforeCompac
 	if (!state.config.responsesCompaction || !shouldUseCodexAdapter(ctx, state.config)) {
 		return undefined;
 	}
+
+	try {
+		return await handleCodexSessionBeforeCompactInner(event, ctx, state, pi);
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		ctx.ui.notify(`OpenAI native compaction failed unexpectedly: ${message}; Pi compaction was not run.`, "error");
+		return { cancel: true };
+	}
+}
+
+async function handleCodexSessionBeforeCompactInner(event: SessionBeforeCompactEvent, ctx: ExtensionContext, state: AdapterState, pi: ExtensionAPI) {
 	if (!isOpenAICodexContext(ctx) && !isResponsesContext(ctx)) {
 		ctx.ui.notify("OpenAI native compaction is enabled, but the current model is not Responses-compatible; Pi compaction was not run.", "error");
 		return { cancel: true };
@@ -132,13 +143,19 @@ export async function handleCodexSessionBeforeCompact(event: SessionBeforeCompac
 	let request: NativeCompactionRequestBody;
 	if (latestNativeCompaction.ok) {
 		const compactedWindow = cloneCompactedWindow(latestNativeCompaction.entry.details?.compactedWindow ?? []);
-		if (!compactedWindow) return undefined;
+		if (!compactedWindow) {
+			ctx.ui.notify("OpenAI native compaction could not clone the previous compacted window; Pi compaction was not run.", "error");
+			return { cancel: true };
+		}
 		const previousKeptStartIndex = findEntryIndexByIdBeforeBoundary(
 			branchEntries,
 			latestNativeCompaction.entry.firstKeptEntryId,
 			latestNativeCompaction.index,
 		);
-		if (previousKeptStartIndex === undefined) return undefined;
+		if (previousKeptStartIndex === undefined) {
+			ctx.ui.notify("OpenAI native compaction could not find the previous kept-window boundary; Pi compaction was not run.", "error");
+			return { cancel: true };
+		}
 		const previousKeptEntries = branchEntries.slice(previousKeptStartIndex, latestNativeCompaction.index);
 		const liveTailEntries = branchEntries.slice(latestNativeCompaction.index + 1);
 		request = {
