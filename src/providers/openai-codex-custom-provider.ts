@@ -110,6 +110,19 @@ interface SessionWebSocketCacheEntry {
 	continuation?: CachedWebSocketContinuationState;
 }
 
+export interface OpenAICodexWebSocketDebugStats {
+	requests: number;
+	connectionsCreated: number;
+	connectionsReused: number;
+	cachedContextRequests: number;
+	storeTrueRequests: number;
+	fullContextRequests: number;
+	deltaRequests: number;
+	lastInputItems: number;
+	lastDeltaInputItems?: number;
+	lastPreviousResponseId?: string;
+}
+
 interface AcquiredWebSocket {
 	socket: WebSocketLike;
 	entry?: SessionWebSocketCacheEntry;
@@ -167,6 +180,38 @@ interface ResponseEnvelope {
 type ServiceTier = ResponseCreateParamsStreaming["service_tier"];
 
 const websocketSessionCache = new Map<string, SessionWebSocketCacheEntry>();
+const websocketDebugStats = new Map<string, OpenAICodexWebSocketDebugStats>();
+
+function getOrCreateWebSocketDebugStats(sessionId: string): OpenAICodexWebSocketDebugStats {
+	let stats = websocketDebugStats.get(sessionId);
+	if (!stats) {
+		stats = {
+			requests: 0,
+			connectionsCreated: 0,
+			connectionsReused: 0,
+			cachedContextRequests: 0,
+			storeTrueRequests: 0,
+			fullContextRequests: 0,
+			deltaRequests: 0,
+			lastInputItems: 0,
+		};
+		websocketDebugStats.set(sessionId, stats);
+	}
+	return stats;
+}
+
+export function getOpenAICodexWebSocketDebugStats(sessionId: string): OpenAICodexWebSocketDebugStats | undefined {
+	const stats = websocketDebugStats.get(sessionId);
+	return stats ? { ...stats } : undefined;
+}
+
+export function resetOpenAICodexWebSocketDebugStats(sessionId?: string): void {
+	if (sessionId) {
+		websocketDebugStats.delete(sessionId);
+		return;
+	}
+	websocketDebugStats.clear();
+}
 
 class NonRetryableProviderError extends Error {}
 
@@ -681,6 +726,7 @@ export function closeOpenAICodexWebSocketSessions(sessionId?: string): void {
 		const entry = websocketSessionCache.get(sessionId);
 		if (entry) closeEntry(entry);
 		websocketSessionCache.delete(sessionId);
+		websocketDebugStats.delete(sessionId);
 		return;
 	}
 
@@ -688,6 +734,7 @@ export function closeOpenAICodexWebSocketSessions(sessionId?: string): void {
 		closeEntry(entry);
 	}
 	websocketSessionCache.clear();
+	websocketDebugStats.clear();
 }
 
 
@@ -1231,7 +1278,7 @@ async function processWebSocketStream<TApi extends Api>(
 	let streamStarted = false;
 
 	for (let attempt = 0; attempt < 2; attempt++) {
-		const { socket, entry, release } = await acquireWebSocket(url, headers, options?.sessionId, options?.signal);
+		const { socket, entry, reused, release } = await acquireWebSocket(url, headers, options?.sessionId, options?.signal);
 		let keepConnection = true;
 		let released = false;
 		let eventCount = 0;
@@ -1241,6 +1288,24 @@ async function processWebSocketStream<TApi extends Api>(
 		// WebSocket continuation still works via connection-scoped previous_response_id state.
 		const fullBody = body;
 		const requestBody = useCachedContext && entry ? buildCachedWebSocketRequestBody(entry, fullBody) : fullBody;
+		const stats = options?.sessionId ? getOrCreateWebSocketDebugStats(options.sessionId) : undefined;
+		if (stats) {
+			stats.requests++;
+			if (reused) stats.connectionsReused++;
+			else stats.connectionsCreated++;
+			if (useCachedContext) stats.cachedContextRequests++;
+			if (requestBody.store === true) stats.storeTrueRequests++;
+			stats.lastInputItems = requestBody.input?.length ?? 0;
+			if (requestBody.previous_response_id) {
+				stats.deltaRequests++;
+				stats.lastDeltaInputItems = requestBody.input?.length ?? 0;
+				stats.lastPreviousResponseId = requestBody.previous_response_id;
+			} else {
+				stats.fullContextRequests++;
+				stats.lastDeltaInputItems = undefined;
+				stats.lastPreviousResponseId = undefined;
+			}
+		}
 
 		const releaseOnce = (releaseOptions?: { keep?: boolean }) => {
 			if (released) return;
