@@ -1,6 +1,14 @@
-import { DynamicBorder, getSettingsListTheme, type ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { Box, Container, SettingsList, Spacer, Text, type SettingItem } from "@earendil-works/pi-tui";
-import { DEFAULT_CODEX_CONVERSION_CONFIG, normalizeCodexVerbosity, type CodexConversionConfig } from "../adapter/config.ts";
+import { getSettingsListTheme, type ExtensionContext, type Theme } from "@earendil-works/pi-coding-agent";
+import { SettingsList, type SettingItem } from "@earendil-works/pi-tui";
+import {
+	COMPACTION_MODELS,
+	COMPACTION_REASONING_LEVELS,
+	DEFAULT_CODEX_CONVERSION_CONFIG,
+	normalizeCodexVerbosity,
+	normalizeCompactionModel,
+	normalizeCompactionReasoning,
+	type CodexConversionConfig,
+} from "../adapter/config.ts";
 import { CHANGELOG_URL, DISCORD_URL, GITHUB_URL, ISSUE_URL, openExternalUrl } from "./links.ts";
 
 export interface CodexSettingsScreenOptions {
@@ -8,68 +16,121 @@ export interface CodexSettingsScreenOptions {
 	onChange: (nextConfig: CodexConversionConfig) => boolean;
 }
 
+type SettingsTab = "general" | "compaction";
+
+const TAB_ORDER: readonly SettingsTab[] = ["general", "compaction"];
+
 export async function openCodexSettingsScreen(ctx: ExtensionContext, options: CodexSettingsScreenOptions): Promise<void> {
 	let draft = { ...options.initialConfig };
-	await ctx.ui.custom<void>((tui, theme, _kb, done) => {
-		const buildItems = (): SettingItem[] => [
-			{ id: "useOnAllModels", label: "Use on all models", currentValue: draft.useOnAllModels ? "on" : "off", values: ["off", "on"] },
-			{ id: "statusLine", label: "Statusline", currentValue: draft.statusLine ? "on" : "off", values: ["off", "on"] },
-			{ id: "fast", label: "Fast mode", currentValue: draft.fast ? "on" : "off", values: ["off", "on"] },
-			{ id: "webSearch", label: "Web search", currentValue: draft.webSearch ? "on" : "off", values: ["off", "on"] },
-			{ id: "imageGeneration", label: "Image generation", currentValue: draft.imageGeneration ? "on" : "off", values: ["off", "on"] },
-			{ id: "responsesCompaction", label: "Responses compaction", currentValue: (draft.responsesCompaction ?? false) ? "on" : "off", values: ["off", "on"] },
-			{ id: "verbosity", label: "Verbosity", currentValue: draft.verbosity, values: ["low", "medium", "high"] },
-		];
+	let activeTab: SettingsTab = "general";
 
-		const container = new Container();
-		const panel = new Box(1, 0);
-		panel.addChild(new DynamicBorder((text) => theme.fg("accent", text)));
-		let settingsList: SettingsList;
-		settingsList = new SettingsList(buildItems(), 6, getSettingsListTheme(), (id, value) => {
-			const nextDraft = { ...draft };
-			const previousValue = buildItems().find((item) => item.id === id)?.currentValue;
-			if (id === "useOnAllModels") nextDraft.useOnAllModels = value === "on";
-			if (id === "statusLine") nextDraft.statusLine = value === "on";
-			if (id === "fast") nextDraft.fast = value === "on";
-			if (id === "webSearch") nextDraft.webSearch = value === "on";
-			if (id === "imageGeneration") nextDraft.imageGeneration = value === "on";
-			if (id === "responsesCompaction") nextDraft.responsesCompaction = value === "on";
-			if (id === "verbosity") nextDraft.verbosity = normalizeCodexVerbosity(value) ?? DEFAULT_CODEX_CONVERSION_CONFIG.verbosity;
-			if (options.onChange(nextDraft)) {
+	await ctx.ui.custom<void>((tui, theme, _kb, done) => {
+		let settingsList = createSettingsList(activeTab, draft, options, (nextDraft) => {
+			draft = nextDraft;
+		}, done, () => tui.requestRender());
+
+		const switchTab = () => {
+			const currentIndex = TAB_ORDER.indexOf(activeTab);
+			activeTab = TAB_ORDER[(currentIndex + 1) % TAB_ORDER.length] ?? "general";
+			settingsList = createSettingsList(activeTab, draft, options, (nextDraft) => {
 				draft = nextDraft;
-			} else if (previousValue !== undefined) {
-				settingsList.updateValue(id, previousValue);
-			}
+			}, done, () => tui.requestRender());
 			tui.requestRender();
-		}, () => done(undefined));
-		panel.addChild(settingsList);
-		panel.addChild(new DynamicBorder((text) => theme.fg("dim", text)));
-		panel.addChild(
-			new Text(
-				[
-					`${theme.bold("g")} github  ${theme.fg("dim", GITHUB_URL)}`,
-					`${theme.bold("c")} changes ${theme.fg("dim", CHANGELOG_URL)}`,
-					`${theme.bold("d")} discord ${theme.fg("dim", DISCORD_URL)}`,
-					`${theme.bold("i")} issue   ${theme.fg("dim", ISSUE_URL)}`,
-				].join("\n"),
-				0,
-				0,
-			),
-		);
-		panel.addChild(new DynamicBorder((text) => theme.fg("accent", text)));
-		container.addChild(new Spacer(1));
-		container.addChild(panel);
+		};
 
 		return {
-			render: (width: number) => container.render(width),
-			invalidate: () => container.invalidate(),
+			render: (width: number) => [
+				formatTabs(activeTab, theme),
+				...(activeTab === "compaction" ? [theme.fg("dim", "  Beta: native OpenAI Responses compaction is experimental. Please report any issues.")] : []),
+				"",
+				...settingsList.render(width),
+				"",
+				...formatLinks(theme),
+				"",
+				theme.fg("dim", "  Tab to switch sections · g/c/d/i open links"),
+			],
+			invalidate: () => settingsList.invalidate(),
 			handleInput: (data: string) => {
+				if (data === "\t") {
+					switchTab();
+					return;
+				}
 				if (handleLinkKey(data, ctx)) return;
 				settingsList.handleInput?.(data);
 				tui.requestRender();
 			},
 		};
 	});
+}
+
+function createSettingsList(
+	tab: SettingsTab,
+	draft: CodexConversionConfig,
+	options: CodexSettingsScreenOptions,
+	onDraftChanged: (draft: CodexConversionConfig) => void,
+	done: (value?: void) => void,
+	requestRender: () => void,
+): SettingsList {
+	let settingsList: SettingsList;
+	settingsList = new SettingsList(buildItems(tab, draft), 8, getSettingsListTheme(), (id, value) => {
+		const nextDraft = applySettingChange(id, value, draft);
+		const previousValue = buildItems(tab, draft).find((item) => item.id === id)?.currentValue;
+		if (options.onChange(nextDraft)) {
+			onDraftChanged(nextDraft);
+			draft = nextDraft;
+		} else if (previousValue !== undefined) {
+			settingsList.updateValue(id, previousValue);
+		}
+		requestRender();
+	}, () => done(undefined));
+	return settingsList;
+}
+
+function buildItems(tab: SettingsTab, draft: CodexConversionConfig): SettingItem[] {
+	if (tab === "compaction") {
+		return [
+			{ id: "responsesCompaction", label: "Responses compaction", currentValue: (draft.responsesCompaction ?? false) ? "on" : "off", values: ["off", "on"] },
+			{ id: "compactionModel", label: "Model", currentValue: draft.compactionModel, values: [...COMPACTION_MODELS] },
+			{ id: "compactionReasoning", label: "Reasoning", currentValue: draft.compactionReasoning, values: [...COMPACTION_REASONING_LEVELS] },
+		];
+	}
+
+	return [
+		{ id: "useOnAllModels", label: "Use on all models", currentValue: draft.useOnAllModels ? "on" : "off", values: ["off", "on"] },
+		{ id: "statusLine", label: "Statusline", currentValue: draft.statusLine ? "on" : "off", values: ["off", "on"] },
+		{ id: "fast", label: "Fast mode", currentValue: draft.fast ? "on" : "off", values: ["off", "on"] },
+		{ id: "webSearch", label: "Web search", currentValue: draft.webSearch ? "on" : "off", values: ["off", "on"] },
+		{ id: "imageGeneration", label: "Image generation", currentValue: draft.imageGeneration ? "on" : "off", values: ["off", "on"] },
+		{ id: "verbosity", label: "Verbosity", currentValue: draft.verbosity, values: ["low", "medium", "high"] },
+	];
+}
+
+function applySettingChange(id: string, value: string, draft: CodexConversionConfig): CodexConversionConfig {
+	const nextDraft = { ...draft };
+	if (id === "useOnAllModels") nextDraft.useOnAllModels = value === "on";
+	if (id === "statusLine") nextDraft.statusLine = value === "on";
+	if (id === "fast") nextDraft.fast = value === "on";
+	if (id === "webSearch") nextDraft.webSearch = value === "on";
+	if (id === "imageGeneration") nextDraft.imageGeneration = value === "on";
+	if (id === "responsesCompaction") nextDraft.responsesCompaction = value === "on";
+	if (id === "compactionModel") nextDraft.compactionModel = normalizeCompactionModel(value) ?? DEFAULT_CODEX_CONVERSION_CONFIG.compactionModel;
+	if (id === "compactionReasoning") nextDraft.compactionReasoning = normalizeCompactionReasoning(value) ?? DEFAULT_CODEX_CONVERSION_CONFIG.compactionReasoning;
+	if (id === "verbosity") nextDraft.verbosity = normalizeCodexVerbosity(value) ?? DEFAULT_CODEX_CONVERSION_CONFIG.verbosity;
+	return nextDraft;
+}
+
+function formatTabs(activeTab: SettingsTab, theme: Theme): string {
+	const renderTab = (tab: SettingsTab, label: string) => activeTab === tab ? theme.bold(label) : theme.fg("dim", label);
+	return `  ${renderTab("general", "General")}  ${theme.fg("dim", "/")}  ${renderTab("compaction", "Compaction")}`;
+}
+
+function formatLinks(theme: Theme): string[] {
+	return [
+		`${theme.bold("g")} github  ${theme.fg("dim", GITHUB_URL)}`,
+		`${theme.bold("c")} changes ${theme.fg("dim", CHANGELOG_URL)}`,
+		`${theme.bold("d")} discord ${theme.fg("dim", DISCORD_URL)}`,
+		`${theme.bold("i")} issue   ${theme.fg("dim", ISSUE_URL)}`,
+	];
 }
 
 function handleLinkKey(data: string, ctx: ExtensionContext): boolean {

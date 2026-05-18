@@ -77,6 +77,7 @@ function getStatusConfig(ctx: ExtensionContext, config: CodexConversionConfig): 
 		fast: showOpenAICodexFlags && config.fast,
 		webSearch: showOpenAICodexFlags && config.webSearch && supportsNativeWebSearch(ctx.model),
 		imageGeneration: showOpenAICodexFlags && config.imageGeneration && supportsNativeImageGeneration(ctx.model),
+		compaction: { enabled: Boolean(config.responsesCompaction), model: config.compactionModel, reasoning: config.compactionReasoning },
 		...(showResponsesVerbosity ? { verbosity: config.verbosity } : {}),
 	};
 }

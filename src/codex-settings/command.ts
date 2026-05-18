@@ -68,5 +68,5 @@ function getCommandConfigUpdate(arg: string, config: CodexConversionConfig): Cod
 }
 
 function formatCodexSettings(config: CodexConversionConfig): string {
-	return `Codex settings: all models ${config.useOnAllModels ? "on" : "off"}, statusline ${config.statusLine ? "on" : "off"}, fast ${config.fast ? "on" : "off"}, web search ${config.webSearch ? "on" : "off"}, image generation ${config.imageGeneration ? "on" : "off"}, responses compaction ${(config.responsesCompaction ?? false) ? "on" : "off"}, verbosity ${config.verbosity}`;
+	return `Codex settings: all models ${config.useOnAllModels ? "on" : "off"}, statusline ${config.statusLine ? "on" : "off"}, fast ${config.fast ? "on" : "off"}, web search ${config.webSearch ? "on" : "off"}, image generation ${config.imageGeneration ? "on" : "off"}, responses compaction ${(config.responsesCompaction ?? false) ? "on" : "off"} (${config.compactionModel}/${config.compactionReasoning}), verbosity ${config.verbosity}`;
 }

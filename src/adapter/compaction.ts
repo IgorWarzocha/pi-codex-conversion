@@ -55,13 +55,13 @@ function buildCompactionTools(pi: ExtensionAPI, ctx: ExtensionContext, state: Ad
 	return payload.tools;
 }
 
-function buildCompactionReasoning(pi: ExtensionAPI, ctx: ExtensionContext): NativeCompactionRequestOptions["reasoning"] {
+function buildCompactionReasoning(pi: ExtensionAPI, ctx: ExtensionContext, state: AdapterState, compactionModel: string): NativeCompactionRequestOptions["reasoning"] {
 	const model = ctx.model;
-	const level = pi.getThinkingLevel();
+	const level = state.config.compactionReasoning === "current" ? pi.getThinkingLevel() : state.config.compactionReasoning;
 	if (!model?.reasoning || level === "off") return undefined;
 	const clampedLevel = clampThinkingLevel(model, level as ModelThinkingLevel);
 	const rawEffort = model.thinkingLevelMap?.[clampedLevel] ?? clampedLevel;
-	const effort = typeof rawEffort === "string" && isOpenAICodexContext(ctx) ? clampCodexReasoningEffort(model.id, rawEffort) : rawEffort;
+	const effort = typeof rawEffort === "string" && isOpenAICodexContext(ctx) ? clampCodexReasoningEffort(compactionModel, rawEffort) : rawEffort;
 	return effort === null ? undefined : { effort, summary: "auto" };
 }
 
@@ -75,9 +75,9 @@ function clampCodexReasoningEffort(modelId: string, effort: string): string {
 	return effort;
 }
 
-function buildCompactionRequestOptions(pi: ExtensionAPI, ctx: ExtensionContext, state: AdapterState): NativeCompactionRequestOptions {
+function buildCompactionRequestOptions(pi: ExtensionAPI, ctx: ExtensionContext, state: AdapterState, compactionModel: string): NativeCompactionRequestOptions {
 	const tools = buildCompactionTools(pi, ctx, state);
-	const reasoning = buildCompactionReasoning(pi, ctx);
+	const reasoning = buildCompactionReasoning(pi, ctx, state, compactionModel);
 	return {
 		parallel_tool_calls: true,
 		prompt_cache_key: ctx.sessionManager.getSessionId(),
@@ -119,12 +119,13 @@ export async function handleCodexSessionBeforeCompact(event: SessionBeforeCompac
 	}
 
 	const runtime = resolution.runtime;
-	const requestOptions = buildCompactionRequestOptions(pi, ctx, state);
+	const compactionModel = state.config.compactionModel;
+	const requestOptions = buildCompactionRequestOptions(pi, ctx, state, compactionModel);
 	const branchEntries = ctx.sessionManager.getBranch();
 	const latestNativeCompaction = resolveLatestNativeCompactionEntry(branchEntries, {
 		provider: runtime.provider,
 		api: runtime.api,
-		model: runtime.model,
+		model: compactionModel,
 		baseUrl: runtime.baseUrl,
 	});
 
@@ -141,7 +142,7 @@ export async function handleCodexSessionBeforeCompact(event: SessionBeforeCompac
 		const previousKeptEntries = branchEntries.slice(previousKeptStartIndex, latestNativeCompaction.index);
 		const liveTailEntries = branchEntries.slice(latestNativeCompaction.index + 1);
 		request = {
-			model: runtime.currentModel.id,
+			model: compactionModel,
 			input: [
 				...compactedWindow,
 				...serializeLiveTailToResponsesInput({ model: runtime.currentModel, entries: previousKeptEntries }),
@@ -152,7 +153,7 @@ export async function handleCodexSessionBeforeCompact(event: SessionBeforeCompac
 		};
 	} else if (latestNativeCompaction.reason === "no-compaction") {
 		request = serializeCompactionPreparationToRequest({
-			model: runtime.currentModel,
+			model: { ...runtime.currentModel, id: compactionModel },
 			preparation: event.preparation,
 			instructions: buildCompactionInstructions(ctx.getSystemPrompt(), event.customInstructions),
 			requestOptions,
@@ -160,7 +161,7 @@ export async function handleCodexSessionBeforeCompact(event: SessionBeforeCompac
 	} else {
 		void getCompactionIdentity(latestNativeCompaction.latestCompaction);
 		request = serializeCompactionPreparationToRequest({
-			model: runtime.currentModel,
+			model: { ...runtime.currentModel, id: compactionModel },
 			preparation: event.preparation,
 			instructions: buildCompactionInstructions(ctx.getSystemPrompt(), event.customInstructions),
 			requestOptions,
@@ -189,7 +190,7 @@ export async function handleCodexSessionBeforeCompact(event: SessionBeforeCompac
 		const details = createNativeCompactionDetails({
 			provider: runtime.provider,
 			api: runtime.api,
-			model: runtime.model,
+			model: compactionModel,
 			baseUrl: runtime.baseUrl,
 			compactedWindow,
 			compactResponseId: compactResult.compactResponseId,
