@@ -37,6 +37,7 @@ export type CreateNativeCompactionDetailsInput = NativeCompactionIdentity & {
 };
 
 export type CreateNativeCompactionShimResultInput = {
+	summary: string;
 	firstKeptEntryId: string;
 	tokensBefore: number;
 	details: NativeCompactionDetails;
@@ -195,7 +196,7 @@ export function createNativeCompactionShimResult(
 	input: CreateNativeCompactionShimResultInput,
 ): CompactionResult<NativeCompactionDetails> {
 	return {
-		summary: createNativeCompactionShimSummary(),
+		summary: input.summary,
 		firstKeptEntryId: input.firstKeptEntryId,
 		tokensBefore: input.tokensBefore,
 		details: input.details,

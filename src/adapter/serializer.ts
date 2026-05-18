@@ -92,8 +92,6 @@ export type ResponsesInputItem =
 
 export type NativeCompactionRequestBody = {
 	model: string;
-	store: boolean;
-	include: string[];
 	input: ResponsesInputItem[];
 	instructions: string;
 	parallel_tool_calls?: boolean;
@@ -167,10 +165,20 @@ function applyBlockImages(messages: Message[], blockImages: boolean): Message[] 
 	});
 }
 
-type CompactionPreparationLike = { messagesToSummarize: AgentMessage[]; turnPrefixMessages: AgentMessage[] };
+type CompactionPreparationLike = { messagesToSummarize: AgentMessage[]; turnPrefixMessages: AgentMessage[]; previousSummary?: string };
 
 export function collectCompactionWindowMessages(preparation: CompactionPreparationLike): AgentMessage[] {
-	return [...preparation.messagesToSummarize, ...preparation.turnPrefixMessages];
+	const previousSummary = preparation.previousSummary?.trim();
+	const previousSummaryMessages: AgentMessage[] = previousSummary
+		? [
+				{
+					role: "user",
+					content: `Previous compaction summary:\n${previousSummary}`,
+					timestamp: Date.now(),
+				} as AgentMessage,
+			]
+		: [];
+	return [...previousSummaryMessages, ...preparation.messagesToSummarize, ...preparation.turnPrefixMessages];
 }
 
 export function serializeCompactionPreparationToRequest<TApi extends Api>(args: {
@@ -195,8 +203,6 @@ export function serializeMessagesToCompactRequest<TApi extends Api>(args: {
 }): NativeCompactionRequestBody {
 	return {
 		model: args.model.id,
-		store: false,
-		include: ["reasoning.encrypted_content"],
 		input: serializeMessagesToResponsesInput(args.model, args.messages),
 		instructions: sanitizeSurrogates(args.instructions),
 		...args.requestOptions,

@@ -47,3 +47,36 @@ export function sanitizeCompactedWindow(output: readonly unknown[]): Record<stri
 	}
 	return sanitized;
 }
+
+function extractTextFromContent(content: unknown, contentTypes: readonly string[]): string | undefined {
+	if (!Array.isArray(content)) return undefined;
+	const allowedTypes = new Set(contentTypes);
+	const text = content
+		.map((part) => isRecord(part) && allowedTypes.has(String(part.type)) && typeof part.text === "string" ? part.text : "")
+		.join("")
+		.trim();
+	return text.length > 0 ? text : undefined;
+}
+
+export function extractCompactionSummaryText(compactedWindow: readonly unknown[]): string | undefined {
+	for (const item of compactedWindow) {
+		if (!isRecord(item) || item.type !== "message") continue;
+		if (item.role === "assistant") {
+			const text = extractTextFromContent(item.content, ["output_text"]);
+			if (text) return text;
+		}
+	}
+
+	for (const item of compactedWindow) {
+		if (!isRecord(item) || item.type !== "message" || item.role !== "user") continue;
+		const text = extractTextFromContent(item.content, ["input_text", "output_text"]);
+		if (text) return text;
+	}
+
+	for (const item of compactedWindow) {
+		if (!isRecord(item) || item.type !== "compaction") continue;
+		if (typeof item.encrypted_content === "string" && item.encrypted_content.trim().length > 0) return item.encrypted_content.trim();
+	}
+
+	return undefined;
+}

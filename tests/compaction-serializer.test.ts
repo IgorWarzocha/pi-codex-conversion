@@ -63,13 +63,12 @@ test("compaction serializer honors blocked image conversion", () => {
 	assert.deepEqual(input, [{ role: "user", content: [{ type: "input_text", text: "Image reading is disabled." }] }]);
 });
 
-test("native compaction requests include Codex-compatible base metadata", () => {
+test("native compaction requests use Codex-compatible compact payload shape", () => {
 	const request = serializeMessagesToCompactRequest({
 		model,
 		messages: [],
 		instructions: "compact",
 	});
 
-	assert.equal(request.store, false);
-	assert.deepEqual(request.include, ["reasoning.encrypted_content"]);
+	assert.deepEqual(Object.keys(request).sort(), ["input", "instructions", "model"]);
 });
