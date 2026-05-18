@@ -1,7 +1,7 @@
 import type { ExtensionAPI, ExtensionContext, SessionBeforeCompactEvent } from "@earendil-works/pi-coding-agent";
 import { clampThinkingLevel, type ModelThinkingLevel, type Tool } from "@earendil-works/pi-ai";
 import { executeNativeCompaction } from "./compact-client.ts";
-import { extractCompactionSummaryText, hasCompactionOutputItem, sanitizeCompactedWindow } from "./compaction-output.ts";
+import { extractCompactionSummaryText, extractHumanReadableCompactionSummary, hasCompactionOutputItem, sanitizeCompactedWindow, summarizeCompactionOutputForDiagnostics } from "./compaction-output.ts";
 import { resolveLatestNativeCompactionEntry } from "./details-store.ts";
 import { rewriteResponsesPayloadWithNativeReplay, serializeLiveTailToResponsesInput } from "./payload-rewrite.ts";
 import { resolveNativeCompactionEnvironment } from "./compaction-runtime.ts";
@@ -102,6 +102,13 @@ function formatCompactFailureMessage(compactResult: Awaited<ReturnType<typeof ex
 	return `OpenAI native compaction failed (${compactResult.reason}${status})${detail}; Pi compaction was not run.`;
 }
 
+function formatCompactRequestDiagnostics(request: NativeCompactionRequestBody): string {
+	const reasoning = isRecord(request.reasoning) && typeof request.reasoning.effort === "string" ? request.reasoning.effort : "none";
+	const serviceTier = typeof request.service_tier === "string" ? request.service_tier : "none";
+	const tools = Array.isArray(request.tools) ? request.tools.length : 0;
+	return `model=${request.model}, input=${request.input.length}, tools=${tools}, reasoning=${reasoning}, service_tier=${serviceTier}`;
+}
+
 export async function handleCodexSessionBeforeCompact(event: SessionBeforeCompactEvent, ctx: ExtensionContext, state: AdapterState, pi: ExtensionAPI) {
 	if (!state.config.responsesCompaction || !shouldUseCodexAdapter(ctx, state.config)) {
 		return undefined;
@@ -194,16 +201,21 @@ async function handleCodexSessionBeforeCompactInner(event: SessionBeforeCompactE
 	}
 	const compactedWindow = sanitizeCompactedWindow(compactResult.compactedWindow);
 	if (compactedWindow.length === 0) {
-		ctx.ui.notify("OpenAI native compaction returned no installable compacted context; Pi compaction was not run.", "error");
+		ctx.ui.notify(`OpenAI native compaction returned no installable compacted context; Pi compaction was not run. Request: ${formatCompactRequestDiagnostics(request)}. Output: ${summarizeCompactionOutputForDiagnostics(compactResult.compactedWindow, compactedWindow)}`, "error");
 		return { cancel: true };
 	}
 	if (!hasCompactionOutputItem(compactedWindow)) {
-		ctx.ui.notify("OpenAI native compaction did not return a compaction item; Pi compaction was not run.", "error");
+		ctx.ui.notify(`OpenAI native compaction did not return a compaction item; Pi compaction was not run. Response=${compactResult.compactResponseId ?? "<none>"}. Request: ${formatCompactRequestDiagnostics(request)}. Output: ${summarizeCompactionOutputForDiagnostics(compactResult.compactedWindow, compactedWindow)}`, "error");
 		return { cancel: true };
 	}
-	const summary = extractCompactionSummaryText(compactedWindow);
-	if (!summary) {
-		ctx.ui.notify("OpenAI native compaction returned compacted context without a displayable summary; Pi compaction was not run.", "error");
+	const encryptedSummary = extractCompactionSummaryText(compactedWindow);
+	if (!encryptedSummary) {
+		ctx.ui.notify(`OpenAI native compaction returned compacted context without a displayable summary; Pi compaction was not run. Response=${compactResult.compactResponseId ?? "<none>"}. Request: ${formatCompactRequestDiagnostics(request)}. Output: ${summarizeCompactionOutputForDiagnostics(compactResult.compactedWindow, compactedWindow)}`, "error");
+		return { cancel: true };
+	}
+	const humanSummary = extractHumanReadableCompactionSummary(compactedWindow);
+	if (!humanSummary) {
+		ctx.ui.notify(`OpenAI native compaction returned encrypted state but no human-readable compacted transcript; Pi compaction was not run. Response=${compactResult.compactResponseId ?? "<none>"}. Request: ${formatCompactRequestDiagnostics(request)}. Output: ${summarizeCompactionOutputForDiagnostics(compactResult.compactedWindow, compactedWindow)}`, "error");
 		return { cancel: true };
 	}
 
@@ -218,7 +230,7 @@ async function handleCodexSessionBeforeCompactInner(event: SessionBeforeCompactE
 			createdAt: compactResult.createdAt,
 			requestMeta: { tokensBefore: event.preparation.tokensBefore, previousSummaryPresent: Boolean(event.preparation.previousSummary) },
 		});
-		return { compaction: createNativeCompactionShimResult({ summary, firstKeptEntryId: event.preparation.firstKeptEntryId, tokensBefore: event.preparation.tokensBefore, details }) };
+		return { compaction: createNativeCompactionShimResult({ summary: humanSummary, firstKeptEntryId: event.preparation.firstKeptEntryId, tokensBefore: event.preparation.tokensBefore, details }) };
 	} catch {
 		ctx.ui.notify("OpenAI native compaction produced details Pi could not store; Pi compaction was not run.", "error");
 		return { cancel: true };

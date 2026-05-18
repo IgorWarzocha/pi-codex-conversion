@@ -1,11 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { extractCompactionSummaryText, hasCompactionOutputItem, sanitizeCompactedWindow, shouldKeepCompactedOutputItem } from "../src/adapter/compaction-output.ts";
+import { extractCompactionSummaryText, extractHumanReadableCompactionSummary, hasCompactionOutputItem, sanitizeCompactedWindow, shouldKeepCompactedOutputItem } from "../src/adapter/compaction-output.ts";
 
 test("sanitizeCompactedWindow keeps only Codex-installable compact output", () => {
 	const assistant = { type: "message", role: "assistant", id: "msg_1", content: [{ type: "output_text", text: "summary", annotations: [] }] };
 	const user = { type: "message", role: "user", content: [{ type: "input_text", text: "keep me" }] };
-	const compaction = { type: "compaction", encrypted_content: "sealed" };
+	const compaction = { type: "compaction_summary", encrypted_content: "sealed" };
 	const output = [
 		{ type: "message", role: "developer", content: "stale instructions" },
 		{ type: "message", role: "system", content: "stale system" },
@@ -37,6 +37,7 @@ test("shouldKeepCompactedOutputItem rejects malformed and non-installable items"
 	assert.equal(shouldKeepCompactedOutputItem({ type: "message", role: "assistant" }), true);
 	assert.equal(shouldKeepCompactedOutputItem({ type: "message", role: "user" }), true);
 	assert.equal(shouldKeepCompactedOutputItem({ type: "compaction", encrypted_content: "sealed" }), true);
+	assert.equal(shouldKeepCompactedOutputItem({ type: "compaction_summary", encrypted_content: "sealed" }), true);
 	assert.equal(shouldKeepCompactedOutputItem({ type: "context_compaction", encrypted_content: "v2-only" }), false);
 	assert.equal(shouldKeepCompactedOutputItem({ type: "message", role: "developer" }), false);
 	assert.equal(shouldKeepCompactedOutputItem({ type: "function_call" }), false);
@@ -55,6 +56,17 @@ test("extractCompactionSummaryText prefers explicit compaction content", () => {
 	);
 });
 
+test("extractHumanReadableCompactionSummary uses compacted transcript text", () => {
+	assert.equal(
+		extractHumanReadableCompactionSummary([
+			{ type: "message", role: "user", content: [{ type: "input_text", text: "Original requirement" }] },
+			{ type: "message", role: "assistant", content: [{ type: "output_text", text: "Implemented the feature" }] },
+			{ type: "compaction_summary", encrypted_content: "qAAAA" },
+		]),
+		"Original requirement\n\nImplemented the feature",
+	);
+});
+
 test("extractCompactionSummaryText does not present retained messages as a summary", () => {
 	assert.equal(
 		extractCompactionSummaryText([
@@ -68,4 +80,5 @@ test("extractCompactionSummaryText does not present retained messages as a summa
 test("hasCompactionOutputItem detects whether native compact returned a compaction item", () => {
 	assert.equal(hasCompactionOutputItem([{ type: "message", role: "assistant" }]), false);
 	assert.equal(hasCompactionOutputItem([{ type: "compaction", encrypted_content: "sealed" }]), true);
+	assert.equal(hasCompactionOutputItem([{ type: "compaction_summary", encrypted_content: "sealed" }]), true);
 });
