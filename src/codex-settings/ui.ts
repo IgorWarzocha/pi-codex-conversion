@@ -1,5 +1,5 @@
 import { getSettingsListTheme, type ExtensionContext, type Theme } from "@earendil-works/pi-coding-agent";
-import { SettingsList, type SettingItem } from "@earendil-works/pi-tui";
+import { SettingsList, truncateToWidth, type SettingItem } from "@earendil-works/pi-tui";
 import {
 	COMPACTION_MODELS,
 	COMPACTION_REASONING_LEVELS,
@@ -39,16 +39,17 @@ export async function openCodexSettingsScreen(ctx: ExtensionContext, options: Co
 		};
 
 		return {
-			render: (width: number) => [
-				formatTabs(activeTab, theme),
-				...(activeTab === "compaction" ? [theme.fg("dim", "  Beta: native OpenAI Responses compaction is experimental. Please report any issues.")] : []),
-				"",
-				...settingsList.render(width),
-				"",
-				...formatLinks(theme),
-				"",
-				theme.fg("dim", "  Tab to switch sections · g/c/d/i open links"),
-			],
+			render: (width: number) =>
+				[
+					formatTabs(activeTab, theme),
+					...(activeTab === "compaction" ? [theme.fg("dim", "  Beta: native OpenAI Responses compaction is experimental. Please report any issues.")] : []),
+					"",
+					...settingsList.render(width),
+					"",
+					...formatLinks(theme),
+					"",
+					theme.fg("dim", "  Tab to switch sections · g/c/d/i open links"),
+				].map((line) => truncateToWidth(line, width, "")),
 			invalidate: () => settingsList.invalidate(),
 			handleInput: (data: string) => {
 				if (data === "\t") {
