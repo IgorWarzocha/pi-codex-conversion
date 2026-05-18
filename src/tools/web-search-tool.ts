@@ -52,7 +52,7 @@ function createEmptyResultComponent(): Container {
 	return new Container();
 }
 
-export function rewriteNativeWebSearchTool(payload: unknown, model: ExtensionContext["model"], toolName: string = WEB_SEARCH_TOOL_NAME): unknown {
+export function rewriteNativeWebSearchTool(payload: unknown, model: ExtensionContext["model"]): unknown {
 	if (!supportsNativeWebSearch(model) || !payload || typeof payload !== "object") {
 		return payload;
 	}
@@ -64,7 +64,7 @@ export function rewriteNativeWebSearchTool(payload: unknown, model: ExtensionCon
 
 	let rewritten = false;
 	const nextTools = tools.map((tool) => {
-		if (!isWebSearchFunctionTool(tool) || tool.name !== toolName) {
+		if (!isWebSearchFunctionTool(tool)) {
 			return tool;
 		}
 		rewritten = true;
