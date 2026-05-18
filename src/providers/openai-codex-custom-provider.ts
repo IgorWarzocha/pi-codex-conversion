@@ -17,6 +17,7 @@ import type { ResponseCreateParamsStreaming } from "openai/resources/responses/r
 import {
 	convertResponsesMessages,
 	convertResponsesTools,
+	CODEX_TOOL_CALL_PROVIDERS,
 	processResponsesStream,
 } from "./openai-responses-shared.ts";
 
@@ -28,7 +29,6 @@ const OPENAI_CODEX_IMAGE_DIR = ".pi/openai-codex-images";
 const OPENAI_CODEX_LATEST_IMAGE_NAME = "latest.png";
 const MAX_RETRIES = 3;
 const BASE_DELAY_MS = 1000;
-const CODEX_TOOL_CALL_PROVIDERS = new Set(["openai", "openai-codex", "opencode"]);
 const CODEX_RESPONSE_STATUSES = new Set(["completed", "incomplete", "failed", "cancelled", "queued", "in_progress"]);
 const OPENAI_BETA_RESPONSES_WEBSOCKETS = "responses_websockets=2026-02-06";
 const WEBSOCKET_MESSAGE_TOO_BIG_CLOSE_CODE = 1009;

@@ -15,6 +15,7 @@ import {
 	type ResponsesInputItem,
 	type ResponsesInputMessageItem,
 } from "./serializer";
+import { isAdapterContextExcludedCustomMessageEntry } from "./context-filter.ts";
 
 export type FreshAuthoritativePreamble = {
 	instructions?: string;
@@ -257,6 +258,7 @@ function toReplayAgentMessage(entry: SessionEntry): AgentMessage | undefined {
 	}
 
 	if (entry.type === "custom_message") {
+		if (isAdapterContextExcludedCustomMessageEntry(entry)) return undefined;
 		return toCustomMessage(entry);
 	}
 

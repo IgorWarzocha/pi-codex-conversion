@@ -1,37 +1,18 @@
-import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { convertToLlm, getAgentDir } from "@earendil-works/pi-coding-agent";
-import type {
-	Api,
-	AssistantMessage,
-	ImageContent,
-	Message,
-	Model,
-	TextContent,
-	ThinkingContent,
-	ToolCall,
-	ToolResultMessage,
-	UserMessage,
-} from "@earendil-works/pi-ai";
+import type { Api, ImageContent, Message, Model, TextContent, ToolResultMessage, UserMessage } from "@earendil-works/pi-ai";
 import type { ResponsesCompatibleRequestPayload } from "./compaction-runtime.ts";
+import { CODEX_TOOL_CALL_PROVIDERS, convertResponsesMessages } from "../providers/openai-responses-shared.ts";
 
 /**
- * Decision for T4: keep a narrow local serializer instead of importing Pi internals.
+ * Decision for native compaction: reuse the provider's Responses serializer.
  *
- * Why this is sufficient for v1:
- * - we only target same-model OpenAI Responses-compatible requests
- * - we only need Pi's current supported message semantics (assistant phase,
- *   reasoning signatures, tool call/result pairing, image blocks)
- * - Pi's shared Responses converter is not publicly exported, so importing it
- *   would require a brittle install-path-specific wrapper
- *
- * The helpers below intentionally mirror Pi's same-model Responses serialization
- * rules closely so later tasks can compare their output against captured
- * before_provider_request payload artifacts.
+ * Replay parity must match the actual OpenAI Codex provider payload, including
+ * tool-call id normalization and cross-model/provider history handling.
  */
-export const COMPACTION_SERIALIZER_STRATEGY = "local-same-model-responses-serializer" as const;
+export const COMPACTION_SERIALIZER_STRATEGY = "provider-responses-serializer" as const;
 
 export type CompactionSerializerStrategy = typeof COMPACTION_SERIALIZER_STRATEGY;
 export type AssistantPhase = "commentary" | "final_answer";
@@ -120,14 +101,6 @@ export type ResponsesParityReport = {
 	mismatches: string[];
 };
 
-type ParsedTextSignature = {
-	id: string;
-	phase?: AssistantPhase;
-};
-
-const SYNTHETIC_TOOL_RESULT_TEXT = "No result provided";
-const NON_VISION_USER_IMAGE_PLACEHOLDER = "(image omitted: model does not support images)";
-const NON_VISION_TOOL_IMAGE_PLACEHOLDER = "(tool image omitted: model does not support images)";
 
 function sanitizeSurrogates(text: string): string {
 	return text.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, "");
@@ -215,41 +188,15 @@ export function serializeMessagesToResponsesInput<TApi extends Api>(
 	options: SerializeResponsesMessagesOptions = {},
 ): ResponsesInputItem[] {
 	const llmMessages = applyBlockImages(convertToLlm(messages), options.blockImages ?? readBlockImagesSetting());
-	const transformedMessages = transformMessagesForResponses(llmMessages, model);
-	const input: ResponsesInputItem[] = [];
-
-	if (options.includeInstructionsInInput && options.instructions) {
-		input.push({
-			role: model.reasoning ? "developer" : "system",
-			content: sanitizeSurrogates(options.instructions),
-		});
-	}
-
-	let messageIndex = 0;
-	for (const message of transformedMessages) {
-		if (message.role === "user") {
-			const item = serializeUserMessage(message, model);
-			if (item) {
-				input.push(item);
-			}
-			messageIndex++;
-			continue;
-		}
-
-		if (message.role === "assistant") {
-			const items = serializeAssistantMessage(message, messageIndex);
-			if (items.length > 0) {
-				input.push(...items);
-			}
-			messageIndex++;
-			continue;
-		}
-
-		input.push(serializeToolResultMessage(message, model));
-		messageIndex++;
-	}
-
-	return input;
+	return convertResponsesMessages(
+		model,
+		{
+			messages: llmMessages,
+			...(options.includeInstructionsInInput && options.instructions ? { systemPrompt: options.instructions } : {}),
+		},
+		CODEX_TOOL_CALL_PROVIDERS,
+		{ includeSystemPrompt: options.includeInstructionsInInput ?? false },
+	) as ResponsesInputItem[];
 }
 
 export function createResponsesInputParitySignature(input: readonly unknown[]): string[] {
@@ -299,321 +246,6 @@ export function compareCompactRequestToPayload(
 		expected: parity.expected,
 		mismatches,
 	};
-}
-
-function isSameModelAssistant<TApi extends Api>(message: AssistantMessage, model: Model<TApi>): boolean {
-	return message.provider === model.provider && message.api === model.api && message.model === model.id;
-}
-
-function transformMessagesForResponses<TApi extends Api>(messages: Message[], model: Model<TApi>): Message[] {
-	const transformed: Message[] = [];
-	let pendingToolCalls: ToolCall[] = [];
-	let existingToolResultIds = new Set<string>();
-
-	for (const message of messages) {
-		if (message.role === "assistant") {
-			const isSameModel = isSameModelAssistant(message, model);
-			if (pendingToolCalls.length > 0) {
-				transformed.push(...createSyntheticToolResults(pendingToolCalls, existingToolResultIds));
-				pendingToolCalls = [];
-				existingToolResultIds = new Set<string>();
-			}
-
-			if (message.stopReason === "error" || message.stopReason === "aborted") {
-				continue;
-			}
-
-			const normalizedContent = message.content.flatMap((block): Array<TextContent | ThinkingContent | ToolCall> => {
-				if (block.type !== "thinking") {
-					return [block];
-				}
-
-				if (isSameModel && block.thinkingSignature) return [block];
-				if (!block.thinking || block.thinking.trim() === "") return [];
-				return [{ type: "text", text: block.thinking }];
-			});
-
-			const normalizedAssistantMessage: AssistantMessage = {
-				...message,
-				content: normalizedContent,
-			};
-			transformed.push(normalizedAssistantMessage);
-
-			const toolCalls = normalizedContent.filter(isToolCallBlock);
-			if (toolCalls.length > 0) {
-				pendingToolCalls = toolCalls;
-				existingToolResultIds = new Set<string>();
-			}
-			continue;
-		}
-
-		if (message.role === "toolResult") {
-			existingToolResultIds.add(message.toolCallId);
-			transformed.push(message);
-			continue;
-		}
-
-		if (pendingToolCalls.length > 0) {
-			transformed.push(...createSyntheticToolResults(pendingToolCalls, existingToolResultIds));
-			pendingToolCalls = [];
-			existingToolResultIds = new Set<string>();
-		}
-
-		transformed.push(message);
-	}
-
-	if (pendingToolCalls.length > 0) {
-		transformed.push(...createSyntheticToolResults(pendingToolCalls, existingToolResultIds));
-	}
-
-	return transformed;
-}
-
-function createSyntheticToolResults(
-	pendingToolCalls: readonly ToolCall[],
-	existingToolResultIds: ReadonlySet<string>,
-): ToolResultMessage[] {
-	const syntheticResults: ToolResultMessage[] = [];
-
-	for (const toolCall of pendingToolCalls) {
-		if (existingToolResultIds.has(toolCall.id)) {
-			continue;
-		}
-
-		syntheticResults.push({
-			role: "toolResult",
-			toolCallId: toolCall.id,
-			toolName: toolCall.name,
-			content: [{ type: "text", text: SYNTHETIC_TOOL_RESULT_TEXT }],
-			isError: true,
-			timestamp: Date.now(),
-		});
-	}
-
-	return syntheticResults;
-}
-
-function serializeUserMessage<TApi extends Api>(
-	message: UserMessage,
-	model: Model<TApi>,
-): ResponsesInputMessageItem | undefined {
-	const contentItems = normalizeUserContent(message.content).flatMap((item) => serializeUserContentItem(item, model));
-	if (contentItems.length === 0) {
-		return undefined;
-	}
-
-	return {
-		role: "user",
-		content: contentItems,
-	};
-}
-
-function serializeUserContentItem<TApi extends Api>(
-	item: TextContent | ImageContent,
-	model: Model<TApi>,
-): ResponsesInputContentItem[] {
-	if (item.type === "text") {
-		return [{ type: "input_text", text: sanitizeSurrogates(item.text) }];
-	}
-
-	if (!model.input.includes("image")) {
-		return [{ type: "input_text", text: NON_VISION_USER_IMAGE_PLACEHOLDER }];
-	}
-
-	return [
-		{
-			type: "input_image",
-			detail: "auto",
-			image_url: `data:${item.mimeType};base64,${item.data}`,
-		},
-	];
-}
-
-type ImageGenerationCallItem = {
-	type: "image_generation_call";
-	id: string;
-	status: string;
-	result: string | null;
-	revised_prompt?: string;
-};
-
-type ImageGenerationCallBlock = {
-	type: "image_generation_call";
-	item: ImageGenerationCallItem;
-};
-
-function isImageGenerationCallBlock(block: unknown): block is ImageGenerationCallBlock {
-	return isRecord(block) && block.type === "image_generation_call" && isRecord(block.item) && block.item.type === "image_generation_call";
-}
-
-function sanitizeImageGenerationCallItem(item: unknown): ImageGenerationCallItem | undefined {
-	if (!isRecord(item)) return undefined;
-	if (item.type !== "image_generation_call") return undefined;
-	if (typeof item.id !== "string" || item.id === "") return undefined;
-	if (typeof item.status !== "string" || item.status === "") return undefined;
-	if (!(typeof item.result === "string" || item.result === null)) return undefined;
-	return {
-		type: "image_generation_call",
-		id: item.id,
-		status: item.status,
-		result: item.result,
-		...(typeof item.revised_prompt === "string" ? { revised_prompt: item.revised_prompt } : {}),
-	};
-}
-
-function serializeAssistantMessage(message: AssistantMessage, messageIndex: number): ResponsesInputItem[] {
-	const items: ResponsesInputItem[] = [];
-	let assistantBlockIndex = 0;
-
-	for (const block of message.content as Array<AssistantMessage["content"][number] | ImageGenerationCallBlock>) {
-		if (block.type === "thinking") {
-			const reasoningItem = parseReasoningItem(block);
-			if (reasoningItem) {
-				items.push(reasoningItem);
-			}
-			continue;
-		}
-
-		if (block.type === "text") {
-			const signature = parseTextSignature(block.textSignature);
-			items.push({
-				type: "message",
-				role: "assistant",
-				content: [{ type: "output_text", text: sanitizeSurrogates(block.text), annotations: [] }],
-				status: "completed",
-				id: normalizeAssistantMessageId(signature?.id, messageIndex, assistantBlockIndex),
-				phase: signature?.phase,
-			});
-			assistantBlockIndex++;
-			continue;
-		}
-
-		if (isImageGenerationCallBlock(block)) {
-			const imageGenerationCall = sanitizeImageGenerationCallItem(block.item);
-			if (imageGenerationCall) items.push(imageGenerationCall);
-			continue;
-		}
-
-		const [callId, rawItemId] = block.id.split("|");
-		items.push({
-			type: "function_call",
-			id: rawItemId,
-			call_id: callId,
-			name: block.name,
-			arguments: JSON.stringify(block.arguments),
-		});
-	}
-
-	return items;
-}
-
-function serializeToolResultMessage<TApi extends Api>(
-	message: ToolResultMessage,
-	model: Model<TApi>,
-): ResponsesFunctionCallOutputItem {
-	const [callId] = message.toolCallId.split("|");
-	const textOutput = message.content
-		.filter((item): item is TextContent => item.type === "text")
-		.map((item) => sanitizeSurrogates(item.text))
-		.join("\n");
-	const hasImages = message.content.some((item) => item.type === "image");
-	const hasText = textOutput.length > 0;
-
-	if (hasImages && model.input.includes("image")) {
-		const output: ResponsesInputContentItem[] = [];
-		if (hasText) {
-			output.push({ type: "input_text", text: textOutput });
-		}
-		for (const item of message.content) {
-			if (item.type !== "image") {
-				continue;
-			}
-			output.push({
-				type: "input_image",
-				detail: "auto",
-				image_url: `data:${item.mimeType};base64,${item.data}`,
-			});
-		}
-		return {
-			type: "function_call_output",
-			call_id: callId,
-			output,
-		};
-	}
-
-	return {
-		type: "function_call_output",
-		call_id: callId,
-		output: hasText ? textOutput : hasImages ? NON_VISION_TOOL_IMAGE_PLACEHOLDER : "(see attached image)",
-	};
-}
-
-function normalizeUserContent(content: UserMessage["content"]): Array<TextContent | ImageContent> {
-	return typeof content === "string" ? [{ type: "text", text: content }] : content;
-}
-
-function parseReasoningItem(block: ThinkingContent): ResponsesReasoningItem | undefined {
-	if (!block.thinkingSignature) {
-		return undefined;
-	}
-
-	try {
-		const parsed = JSON.parse(block.thinkingSignature);
-		if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-			return undefined;
-		}
-		return parsed as ResponsesReasoningItem;
-	} catch {
-		return undefined;
-	}
-}
-
-function parseTextSignature(signature: string | undefined): ParsedTextSignature | undefined {
-	if (!signature) {
-		return undefined;
-	}
-
-	if (!signature.startsWith("{")) {
-		return { id: signature };
-	}
-
-	try {
-		const parsed = JSON.parse(signature);
-		if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-			return undefined;
-		}
-
-		const record = parsed as Record<string, unknown>;
-		if (record.v !== 1 || typeof record.id !== "string") {
-			return undefined;
-		}
-
-		return {
-			id: record.id,
-			phase:
-				record.phase === "commentary" || record.phase === "final_answer"
-					? record.phase
-					: undefined,
-		};
-	} catch {
-		return undefined;
-	}
-}
-
-function normalizeAssistantMessageId(id: string | undefined, messageIndex: number, assistantBlockIndex: number): string {
-	if (!id) {
-		return `msg_${messageIndex}_${assistantBlockIndex}`;
-	}
-
-	if (id.length <= 64) {
-		return id;
-	}
-
-	return `msg_${createHash("sha1").update(id).digest("hex").slice(0, 12)}`;
-}
-
-function isToolCallBlock(block: AssistantMessage["content"][number]): block is ToolCall {
-	return block.type === "toolCall";
 }
 
 function describeResponsesInputItem(item: unknown): string {

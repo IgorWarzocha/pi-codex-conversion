@@ -264,7 +264,7 @@ export async function rewriteCodexCompactedProviderRequest(payload: unknown, ctx
 	const latestNativeCompaction = resolveLatestNativeCompactionEntry(branchEntries, {
 		provider: runtime.provider,
 		api: runtime.api,
-		model: runtime.model,
+		model: state.config.compactionModel,
 		baseUrl: runtime.baseUrl,
 	});
 	if (!latestNativeCompaction.ok) return undefined;
