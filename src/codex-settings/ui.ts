@@ -14,6 +14,7 @@ import { CHANGELOG_URL, DISCORD_URL, GITHUB_URL, ISSUE_URL, openExternalUrl } fr
 export interface CodexSettingsScreenOptions {
 	initialConfig: CodexConversionConfig;
 	onChange: (nextConfig: CodexConversionConfig) => boolean;
+	initialTab?: SettingsTab;
 }
 
 type SettingsTab = "general" | "compaction";
@@ -22,7 +23,7 @@ const TAB_ORDER: readonly SettingsTab[] = ["general", "compaction"];
 
 export async function openCodexSettingsScreen(ctx: ExtensionContext, options: CodexSettingsScreenOptions): Promise<void> {
 	let draft = { ...options.initialConfig };
-	let activeTab: SettingsTab = "general";
+	let activeTab: SettingsTab = options.initialTab ?? "general";
 
 	await ctx.ui.custom<void>((tui, theme, _kb, done) => {
 		let settingsList = createSettingsList(activeTab, draft, options, (nextDraft) => {
@@ -44,7 +45,7 @@ export async function openCodexSettingsScreen(ctx: ExtensionContext, options: Co
 					rule(width, theme, "accent"),
 					formatTabs(activeTab, theme),
 					rule(width, theme, "borderMuted"),
-					...(activeTab === "compaction" ? [theme.fg("dim", "  Beta: native OpenAI Responses compaction is experimental. Please report any issues.")] : []),
+					...(activeTab === "compaction" ? formatCompactionNotes(theme) : []),
 					"",
 					...settingsList.render(width),
 					rule(width, theme, "borderMuted"),
@@ -64,6 +65,13 @@ export async function openCodexSettingsScreen(ctx: ExtensionContext, options: Co
 			},
 		};
 	});
+}
+
+function formatCompactionNotes(theme: Theme): string[] {
+	return [
+		theme.fg("dim", "  Beta: native OpenAI Responses compaction is experimental. Please report any issues."),
+		theme.fg("error", "  Warning: do not turn this off mid-session; old context may be much less reliable."),
+	];
 }
 
 function rule(width: number, theme: Theme, color: "accent" | "borderMuted"): string {

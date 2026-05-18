@@ -1,4 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Box, Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { getCodexRuntimeShell } from "./adapter/runtime-shell.ts";
 import { clearApplyPatchRenderState, registerApplyPatchTool } from "./tools/apply-patch-tool.ts";
 import { createExecCommandTracker } from "./tools/exec-command-state.ts";
@@ -19,6 +20,7 @@ import { readCodexConversionConfig } from "./adapter/config.ts";
 import { syncAdapter, mergeAdapterTools, restoreTools, stripAdapterTools, shouldUseCodexAdapter } from "./adapter/activation.ts";
 import { rewriteCodexProviderRequest } from "./adapter/provider-request.ts";
 import { handleCodexSessionBeforeCompact } from "./adapter/compaction.ts";
+import { isNativeCompactionDetails, NATIVE_COMPACTION_DISPLAY_MESSAGE_TYPE, NATIVE_COMPACTION_DISPLAY_TEXT } from "./adapter/types.ts";
 import { getCodexSkillPaths } from "./adapter/skills.ts";
 import type { AdapterState } from "./adapter/state.ts";
 import { registerCodexCommand } from "./codex-settings/command.ts";
@@ -67,6 +69,16 @@ export default function codexConversion(pi: ExtensionAPI) {
 	registerWriteStdinTool(pi, sessions);
 	ensureOptionalNativeToolsRegistered();
 	registerCodexCommand(pi, state, ensureOptionalNativeToolsRegistered);
+
+	pi.registerMessageRenderer(NATIVE_COMPACTION_DISPLAY_MESSAGE_TYPE, (message, _options, theme) => {
+		const box = new Box(1, 1, (text) => theme.bg("customMessageBg", text));
+		box.addChild(new Text(theme.fg("customMessageLabel", theme.bold("[compaction]")), 0, 0));
+		const content = typeof message.content === "string" ? message.content : NATIVE_COMPACTION_DISPLAY_TEXT;
+		box.addChild(new Text(`\n${theme.fg("customMessageText", content)}`, 0, 0));
+		const render = box.render.bind(box);
+		box.render = (width) => render(width).map((line) => truncateToWidth(line, width, ""));
+		return box;
+	});
 
 	sessions.onSessionExit((sessionId) => {
 		tracker.recordSessionFinished(sessionId);
@@ -144,6 +156,19 @@ export default function codexConversion(pi: ExtensionAPI) {
 		return handleCodexSessionBeforeCompact(event, ctx, state, pi);
 	});
 
+	pi.on("session_compact", async (event) => {
+		if (!event.fromExtension || !isNativeCompactionDetails(event.compactionEntry.details)) return;
+		pi.sendMessage(
+			{
+				customType: NATIVE_COMPACTION_DISPLAY_MESSAGE_TYPE,
+				content: NATIVE_COMPACTION_DISPLAY_TEXT,
+				display: true,
+				details: { compactionEntryId: event.compactionEntry.id },
+			},
+			{ triggerTurn: false },
+		);
+	});
+
 	pi.on("context", async (event) => {
 		return {
 			messages: event.messages.filter(
@@ -152,7 +177,8 @@ export default function codexConversion(pi: ExtensionAPI) {
 						message.role === "custom" &&
 						(message.customType === WEB_SEARCH_SESSION_NOTE_TYPE ||
 							message.customType === WEB_SEARCH_ACTIVITY_MESSAGE_TYPE ||
-							message.customType === IMAGE_SAVE_DISPLAY_MESSAGE_TYPE)
+							message.customType === IMAGE_SAVE_DISPLAY_MESSAGE_TYPE ||
+							message.customType === NATIVE_COMPACTION_DISPLAY_MESSAGE_TYPE)
 					),
 			),
 		};

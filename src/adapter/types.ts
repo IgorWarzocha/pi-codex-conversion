@@ -3,6 +3,14 @@ import type { CompactionEntry, CompactionResult } from "@earendil-works/pi-codin
 export const EXTENSION_ID = "openai-native-compaction";
 export const NATIVE_COMPACTION_STRATEGY = "openai-native-compact-v1";
 export const NATIVE_COMPACTION_SHIM_SUMMARY = "[OpenAI native compaction checkpoint]";
+export const NATIVE_COMPACTION_DISPLAY_MESSAGE_TYPE = "codex-native-compaction-display";
+export const NATIVE_COMPACTION_DISPLAY_TEXT = [
+	"Codex native compaction was used for this checkpoint.",
+	"",
+	"The compaction result is encrypted by OpenAI and is not human-readable in Pi.",
+	"",
+	"Warning: do not turn Responses compaction off mid-session; old context may be much less reliable.",
+].join("\n");
 
 export type NativeCompactionStrategy = typeof NATIVE_COMPACTION_STRATEGY;
 export type NativeCompactionShimSummary = typeof NATIVE_COMPACTION_SHIM_SUMMARY;

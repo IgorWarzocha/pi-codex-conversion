@@ -32,6 +32,18 @@ export function registerCodexCommand(pi: ExtensionAPI, state: AdapterState, onCo
 		handler: async (args, ctx) => {
 			state.config = readCodexConversionConfig();
 			const arg = args.trim().toLowerCase();
+			if (arg === "compact") {
+				if (!ctx.hasUI) {
+					ctx.ui.notify(formatCodexSettings(state.config), "info");
+					return;
+				}
+				await openCodexSettingsScreen(ctx, {
+					initialConfig: state.config,
+					initialTab: "compaction",
+					onChange: (config) => saveAndApply(ctx, config),
+				});
+				return;
+			}
 			const nextConfig = getCommandConfigUpdate(arg, state.config);
 			if (nextConfig) {
 				saveAndApply(ctx, nextConfig);
@@ -62,7 +74,6 @@ function getCommandConfigUpdate(arg: string, config: CodexConversionConfig): Cod
 	if (arg === "status") return { ...config, statusLine: !config.statusLine };
 	if (arg === "search") return { ...config, webSearch: !config.webSearch };
 	if (arg === "image") return { ...config, imageGeneration: !config.imageGeneration };
-	if (arg === "compact") return { ...config, responsesCompaction: !(config.responsesCompaction ?? false) };
 	const verbosity = normalizeCodexVerbosity(arg);
 	return verbosity ? { ...config, verbosity } : undefined;
 }
