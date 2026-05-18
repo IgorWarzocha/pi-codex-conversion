@@ -110,13 +110,17 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
+let cachedBlockImagesSetting: boolean | undefined;
+
 function readBlockImagesSetting(): boolean {
+	if (cachedBlockImagesSetting !== undefined) return cachedBlockImagesSetting;
 	try {
 		const parsed = JSON.parse(readFileSync(join(getAgentDir(), "settings.json"), "utf-8")) as unknown;
-		return isRecord(parsed) && isRecord(parsed.images) && parsed.images.blockImages === true;
+		cachedBlockImagesSetting = isRecord(parsed) && isRecord(parsed.images) && parsed.images.blockImages === true;
 	} catch {
-		return false;
+		cachedBlockImagesSetting = false;
 	}
+	return cachedBlockImagesSetting;
 }
 
 function replaceImagesWithDisabledPlaceholder<TMessage extends UserMessage | ToolResultMessage>(message: TMessage): TMessage {

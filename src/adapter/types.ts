@@ -123,12 +123,16 @@ export function isNativeCompactionRequestMeta(value: unknown): value is NativeCo
 		return false;
 	}
 
-	const { tokensBefore, previousSummaryPresent } = value;
+	const { tokensBefore, previousSummaryPresent, compactedKeptWindow } = value;
 	if (tokensBefore !== undefined && !isFiniteNonNegativeNumber(tokensBefore)) {
 		return false;
 	}
 
 	if (previousSummaryPresent !== undefined && typeof previousSummaryPresent !== "boolean") {
+		return false;
+	}
+
+	if (compactedKeptWindow !== undefined && typeof compactedKeptWindow !== "boolean") {
 		return false;
 	}
 

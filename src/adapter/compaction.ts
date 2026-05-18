@@ -28,11 +28,6 @@ function cloneCompactedWindow(window: readonly unknown[]): ResponsesInputItem[] 
 	return window.map((item) => structuredClone(item));
 }
 
-function findEntryIndexByIdBeforeBoundary(entries: readonly { id: string }[], entryId: string, boundaryIndex: number): number | undefined {
-	const index = entries.findIndex((entry, candidateIndex) => candidateIndex < boundaryIndex && entry.id === entryId);
-	return index >= 0 ? index : undefined;
-}
-
 function buildCompactionInstructions(systemPrompt: string, customInstructions?: string): string {
 	const guidance = customInstructions?.trim();
 	return guidance ? `${systemPrompt}\n\nAdditional user guidance for this manual /compact request:\n${guidance}` : systemPrompt;
@@ -143,7 +138,6 @@ async function handleCodexSessionBeforeCompactInner(event: SessionBeforeCompactE
 	const latestNativeCompaction = resolveLatestNativeCompactionEntry(branchEntries, {
 		provider: runtime.provider,
 		api: runtime.api,
-		model: compactionModel,
 		baseUrl: runtime.baseUrl,
 	});
 
@@ -155,22 +149,11 @@ async function handleCodexSessionBeforeCompactInner(event: SessionBeforeCompactE
 			ctx.ui.notify("OpenAI native compaction could not clone the previous compacted window; Pi compaction was not run.", "error");
 			return { cancel: true };
 		}
-		const previousKeptStartIndex = findEntryIndexByIdBeforeBoundary(
-			branchEntries,
-			latestNativeCompaction.entry.firstKeptEntryId,
-			latestNativeCompaction.index,
-		);
-		if (previousKeptStartIndex === undefined) {
-			ctx.ui.notify("OpenAI native compaction could not find the previous kept-window boundary; Pi compaction was not run.", "error");
-			return { cancel: true };
-		}
-		const previousKeptEntries = branchEntries.slice(previousKeptStartIndex, latestNativeCompaction.index);
 		const liveTailEntries = branchEntries.slice(latestNativeCompaction.index + 1);
 		request = {
 			model: compactionModel,
 			input: [
 				...compactedWindow,
-				...serializeLiveTailToResponsesInput({ model: runtime.currentModel, entries: previousKeptEntries }),
 				...serializeLiveTailToResponsesInput({ model: runtime.currentModel, entries: liveTailEntries }),
 			],
 			instructions: buildCompactionInstructions(ctx.getSystemPrompt(), event.customInstructions),
@@ -264,7 +247,6 @@ export async function rewriteCodexCompactedProviderRequest(payload: unknown, ctx
 	const latestNativeCompaction = resolveLatestNativeCompactionEntry(branchEntries, {
 		provider: runtime.provider,
 		api: runtime.api,
-		model: state.config.compactionModel,
 		baseUrl: runtime.baseUrl,
 	});
 	if (!latestNativeCompaction.ok) return undefined;
