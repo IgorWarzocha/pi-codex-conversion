@@ -60,8 +60,19 @@ function buildCompactionReasoning(pi: ExtensionAPI, ctx: ExtensionContext): Nati
 	const level = pi.getThinkingLevel();
 	if (!model?.reasoning || level === "off") return undefined;
 	const clampedLevel = clampThinkingLevel(model, level as ModelThinkingLevel);
-	const effort = model.thinkingLevelMap?.[clampedLevel] ?? clampedLevel;
+	const rawEffort = model.thinkingLevelMap?.[clampedLevel] ?? clampedLevel;
+	const effort = typeof rawEffort === "string" && isOpenAICodexContext(ctx) ? clampCodexReasoningEffort(model.id, rawEffort) : rawEffort;
 	return effort === null ? undefined : { effort, summary: "auto" };
+}
+
+function clampCodexReasoningEffort(modelId: string, effort: string): string {
+	const id = modelId.includes("/") ? (modelId.split("/").pop() ?? modelId) : modelId;
+	const gpt5MinorMatch = /^gpt-5\.(\d+)/.exec(id);
+	const gpt5Minor = gpt5MinorMatch ? Number.parseInt(gpt5MinorMatch[1], 10) : undefined;
+	if (gpt5Minor !== undefined && gpt5Minor >= 2 && effort === "minimal") return "low";
+	if (id === "gpt-5.1" && effort === "xhigh") return "high";
+	if (id === "gpt-5.1-codex-mini") return effort === "high" || effort === "xhigh" ? "high" : "medium";
+	return effort;
 }
 
 function buildCompactionRequestOptions(pi: ExtensionAPI, ctx: ExtensionContext, state: AdapterState): NativeCompactionRequestOptions {
@@ -116,6 +127,8 @@ export async function handleCodexSessionBeforeCompact(event: SessionBeforeCompac
 		const liveTailEntries = branchEntries.slice(latestNativeCompaction.index + 1);
 		request = {
 			model: runtime.currentModel.id,
+			store: false,
+			include: ["reasoning.encrypted_content"],
 			input: [
 				...compactedWindow,
 				...serializeLiveTailToResponsesInput({ model: runtime.currentModel, entries: previousKeptEntries }),

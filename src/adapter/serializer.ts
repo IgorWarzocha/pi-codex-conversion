@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import { convertToLlm } from "@earendil-works/pi-coding-agent";
+import { convertToLlm, getAgentDir } from "@earendil-works/pi-coding-agent";
 import type {
 	Api,
 	AssistantMessage,
@@ -90,6 +92,8 @@ export type ResponsesInputItem =
 
 export type NativeCompactionRequestBody = {
 	model: string;
+	store: boolean;
+	include: string[];
 	input: ResponsesInputItem[];
 	instructions: string;
 	parallel_tool_calls?: boolean;
@@ -108,6 +112,7 @@ export type NativeCompactionRequestOptions = Pick<
 export type SerializeResponsesMessagesOptions = {
 	instructions?: string;
 	includeInstructionsInInput?: boolean;
+	blockImages?: boolean;
 };
 
 export type ResponsesParityReport = {
@@ -128,6 +133,38 @@ const NON_VISION_TOOL_IMAGE_PLACEHOLDER = "(tool image omitted: model does not s
 
 function sanitizeSurrogates(text: string): string {
 	return text.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, "");
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function readBlockImagesSetting(): boolean {
+	try {
+		const parsed = JSON.parse(readFileSync(join(getAgentDir(), "settings.json"), "utf-8")) as unknown;
+		return isRecord(parsed) && isRecord(parsed.images) && parsed.images.blockImages === true;
+	} catch {
+		return false;
+	}
+}
+
+function replaceImagesWithDisabledPlaceholder<TMessage extends UserMessage | ToolResultMessage>(message: TMessage): TMessage {
+	if (!Array.isArray(message.content) || !message.content.some((item) => item.type === "image")) return message;
+	const content = message.content
+		.map((item): TextContent | ImageContent => item.type === "image" ? { type: "text", text: "Image reading is disabled." } : item)
+		.filter((item, index, items) => {
+			const previous = items[index - 1];
+			return !(item.type === "text" && item.text === "Image reading is disabled." && previous?.type === "text" && previous.text === "Image reading is disabled.");
+		});
+	return { ...message, content };
+}
+
+function applyBlockImages(messages: Message[], blockImages: boolean): Message[] {
+	if (!blockImages) return messages;
+	return messages.map((message) => {
+		if (message.role === "user" || message.role === "toolResult") return replaceImagesWithDisabledPlaceholder(message);
+		return message;
+	});
 }
 
 type CompactionPreparationLike = { messagesToSummarize: AgentMessage[]; turnPrefixMessages: AgentMessage[] };
@@ -158,6 +195,8 @@ export function serializeMessagesToCompactRequest<TApi extends Api>(args: {
 }): NativeCompactionRequestBody {
 	return {
 		model: args.model.id,
+		store: false,
+		include: ["reasoning.encrypted_content"],
 		input: serializeMessagesToResponsesInput(args.model, args.messages),
 		instructions: sanitizeSurrogates(args.instructions),
 		...args.requestOptions,
@@ -169,7 +208,7 @@ export function serializeMessagesToResponsesInput<TApi extends Api>(
 	messages: AgentMessage[],
 	options: SerializeResponsesMessagesOptions = {},
 ): ResponsesInputItem[] {
-	const llmMessages = convertToLlm(messages);
+	const llmMessages = applyBlockImages(convertToLlm(messages), options.blockImages ?? readBlockImagesSetting());
 	const transformedMessages = transformMessagesForResponses(llmMessages, model);
 	const input: ResponsesInputItem[] = [];
 
@@ -384,10 +423,43 @@ function serializeUserContentItem<TApi extends Api>(
 	];
 }
 
+type ImageGenerationCallItem = {
+	type: "image_generation_call";
+	id: string;
+	status: string;
+	result: string | null;
+	revised_prompt?: string;
+};
+
+type ImageGenerationCallBlock = {
+	type: "image_generation_call";
+	item: ImageGenerationCallItem;
+};
+
+function isImageGenerationCallBlock(block: unknown): block is ImageGenerationCallBlock {
+	return isRecord(block) && block.type === "image_generation_call" && isRecord(block.item) && block.item.type === "image_generation_call";
+}
+
+function sanitizeImageGenerationCallItem(item: unknown): ImageGenerationCallItem | undefined {
+	if (!isRecord(item)) return undefined;
+	if (item.type !== "image_generation_call") return undefined;
+	if (typeof item.id !== "string" || item.id === "") return undefined;
+	if (typeof item.status !== "string" || item.status === "") return undefined;
+	if (!(typeof item.result === "string" || item.result === null)) return undefined;
+	return {
+		type: "image_generation_call",
+		id: item.id,
+		status: item.status,
+		result: item.result,
+		...(typeof item.revised_prompt === "string" ? { revised_prompt: item.revised_prompt } : {}),
+	};
+}
+
 function serializeAssistantMessage(message: AssistantMessage, messageIndex: number): ResponsesInputItem[] {
 	const items: ResponsesInputItem[] = [];
+	let assistantBlockIndex = 0;
 
-	for (const block of message.content) {
+	for (const block of message.content as Array<AssistantMessage["content"][number] | ImageGenerationCallBlock>) {
 		if (block.type === "thinking") {
 			const reasoningItem = parseReasoningItem(block);
 			if (reasoningItem) {
@@ -403,9 +475,16 @@ function serializeAssistantMessage(message: AssistantMessage, messageIndex: numb
 				role: "assistant",
 				content: [{ type: "output_text", text: sanitizeSurrogates(block.text), annotations: [] }],
 				status: "completed",
-				id: normalizeAssistantMessageId(signature?.id, messageIndex),
+				id: normalizeAssistantMessageId(signature?.id, messageIndex, assistantBlockIndex),
 				phase: signature?.phase,
 			});
+			assistantBlockIndex++;
+			continue;
+		}
+
+		if (isImageGenerationCallBlock(block)) {
+			const imageGenerationCall = sanitizeImageGenerationCallItem(block.item);
+			if (imageGenerationCall) items.push(imageGenerationCall);
 			continue;
 		}
 
@@ -515,9 +594,9 @@ function parseTextSignature(signature: string | undefined): ParsedTextSignature 
 	}
 }
 
-function normalizeAssistantMessageId(id: string | undefined, messageIndex: number): string {
+function normalizeAssistantMessageId(id: string | undefined, messageIndex: number, assistantBlockIndex: number): string {
 	if (!id) {
-		return `msg_${messageIndex}`;
+		return `msg_${messageIndex}_${assistantBlockIndex}`;
 	}
 
 	if (id.length <= 64) {
