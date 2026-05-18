@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { extractCompactionSummaryText, sanitizeCompactedWindow, shouldKeepCompactedOutputItem } from "../src/adapter/compaction-output.ts";
+import { extractCompactionSummaryText, hasCompactionOutputItem, sanitizeCompactedWindow, shouldKeepCompactedOutputItem } from "../src/adapter/compaction-output.ts";
 
 test("sanitizeCompactedWindow keeps only Codex-installable compact output", () => {
 	const assistant = { type: "message", role: "assistant", id: "msg_1", content: [{ type: "output_text", text: "summary", annotations: [] }] };
@@ -55,12 +55,17 @@ test("extractCompactionSummaryText prefers explicit compaction content", () => {
 	);
 });
 
-test("extractCompactionSummaryText does not present an arbitrary retained assistant turn as a summary", () => {
+test("extractCompactionSummaryText does not present retained messages as a summary", () => {
 	assert.equal(
 		extractCompactionSummaryText([
 			{ type: "message", role: "assistant", content: [{ type: "output_text", text: "retained assistant turn" }] },
 			{ type: "message", role: "user", content: [{ type: "input_text", text: "retained user turn" }] },
 		]),
-		"OpenAI native compaction completed. Compacted context contains 2 messages (1 user, 1 assistant).",
+		undefined,
 	);
+});
+
+test("hasCompactionOutputItem detects whether native compact returned a compaction item", () => {
+	assert.equal(hasCompactionOutputItem([{ type: "message", role: "assistant" }]), false);
+	assert.equal(hasCompactionOutputItem([{ type: "compaction", encrypted_content: "sealed" }]), true);
 });

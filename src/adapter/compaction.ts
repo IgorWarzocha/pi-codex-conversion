@@ -1,7 +1,7 @@
 import type { ExtensionAPI, ExtensionContext, SessionBeforeCompactEvent } from "@earendil-works/pi-coding-agent";
 import { clampThinkingLevel, type ModelThinkingLevel, type Tool } from "@earendil-works/pi-ai";
 import { executeNativeCompaction } from "./compact-client.ts";
-import { extractCompactionSummaryText, sanitizeCompactedWindow } from "./compaction-output.ts";
+import { extractCompactionSummaryText, hasCompactionOutputItem, sanitizeCompactedWindow } from "./compaction-output.ts";
 import { resolveLatestNativeCompactionEntry } from "./details-store.ts";
 import { rewriteResponsesPayloadWithNativeReplay, serializeLiveTailToResponsesInput } from "./payload-rewrite.ts";
 import { resolveNativeCompactionEnvironment } from "./compaction-runtime.ts";
@@ -178,6 +178,10 @@ export async function handleCodexSessionBeforeCompact(event: SessionBeforeCompac
 	const compactedWindow = sanitizeCompactedWindow(compactResult.compactedWindow);
 	if (compactedWindow.length === 0) {
 		ctx.ui.notify("OpenAI native compaction returned no installable compacted context; Pi compaction was not run.", "error");
+		return { cancel: true };
+	}
+	if (!hasCompactionOutputItem(compactedWindow)) {
+		ctx.ui.notify("OpenAI native compaction did not return a compaction item; Pi compaction was not run.", "error");
 		return { cancel: true };
 	}
 	const summary = extractCompactionSummaryText(compactedWindow);

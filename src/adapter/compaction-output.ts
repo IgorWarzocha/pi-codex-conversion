@@ -48,34 +48,14 @@ export function sanitizeCompactedWindow(output: readonly unknown[]): Record<stri
 	return sanitized;
 }
 
-function extractTextFromContent(content: unknown, contentTypes: readonly string[]): string | undefined {
-	if (!Array.isArray(content)) return undefined;
-	const allowedTypes = new Set(contentTypes);
-	const text = content
-		.map((part) => isRecord(part) && allowedTypes.has(String(part.type)) && typeof part.text === "string" ? part.text : "")
-		.join("")
-		.trim();
-	return text.length > 0 ? text : undefined;
-}
-
 export function extractCompactionSummaryText(compactedWindow: readonly unknown[]): string | undefined {
 	for (const item of compactedWindow) {
 		if (!isRecord(item) || item.type !== "compaction") continue;
 		if (typeof item.encrypted_content === "string" && item.encrypted_content.trim().length > 0) return item.encrypted_content.trim();
 	}
-
-	const messageItems = compactedWindow.filter((item) => isRecord(item) && item.type === "message");
-	if (messageItems.length === 1) {
-		const [item] = messageItems;
-		if (isRecord(item) && item.role === "assistant") return extractTextFromContent(item.content, ["output_text"]);
-		if (isRecord(item) && item.role === "user") return extractTextFromContent(item.content, ["input_text", "output_text"]);
-	}
-
-	const userMessages = messageItems.filter((item) => isRecord(item) && item.role === "user").length;
-	const assistantMessages = messageItems.filter((item) => isRecord(item) && item.role === "assistant").length;
-	if (messageItems.length > 0) {
-		return `OpenAI native compaction completed. Compacted context contains ${messageItems.length} message${messageItems.length === 1 ? "" : "s"} (${userMessages} user, ${assistantMessages} assistant).`;
-	}
-
 	return undefined;
+}
+
+export function hasCompactionOutputItem(compactedWindow: readonly unknown[]): boolean {
+	return compactedWindow.some((item) => isRecord(item) && item.type === "compaction");
 }
