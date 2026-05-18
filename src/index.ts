@@ -141,7 +141,7 @@ export default function codexConversion(pi: ExtensionAPI) {
 
 	pi.on("session_before_compact", async (event, ctx) => {
 		state.cwd = ctx.cwd;
-		return handleCodexSessionBeforeCompact(event, ctx, state);
+		return handleCodexSessionBeforeCompact(event, ctx, state, pi);
 	});
 
 	pi.on("context", async (event) => {

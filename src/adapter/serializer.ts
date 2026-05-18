@@ -92,7 +92,18 @@ export type NativeCompactionRequestBody = {
 	model: string;
 	input: ResponsesInputItem[];
 	instructions: string;
+	parallel_tool_calls?: boolean;
+	prompt_cache_key?: string;
+	service_tier?: string;
+	text?: { verbosity: string };
+	tools?: unknown[];
+	reasoning?: unknown;
 };
+
+export type NativeCompactionRequestOptions = Pick<
+	NativeCompactionRequestBody,
+	"parallel_tool_calls" | "prompt_cache_key" | "service_tier" | "text" | "tools" | "reasoning"
+>;
 
 export type SerializeResponsesMessagesOptions = {
 	instructions?: string;
@@ -129,11 +140,13 @@ export function serializeCompactionPreparationToRequest<TApi extends Api>(args: 
 	model: Model<TApi>;
 	preparation: CompactionPreparationLike;
 	instructions: string;
+	requestOptions?: NativeCompactionRequestOptions;
 }): NativeCompactionRequestBody {
 	return serializeMessagesToCompactRequest({
 		model: args.model,
 		messages: collectCompactionWindowMessages(args.preparation),
 		instructions: args.instructions,
+		requestOptions: args.requestOptions,
 	});
 }
 
@@ -141,11 +154,13 @@ export function serializeMessagesToCompactRequest<TApi extends Api>(args: {
 	model: Model<TApi>;
 	messages: AgentMessage[];
 	instructions: string;
+	requestOptions?: NativeCompactionRequestOptions;
 }): NativeCompactionRequestBody {
 	return {
 		model: args.model.id,
 		input: serializeMessagesToResponsesInput(args.model, args.messages),
 		instructions: sanitizeSurrogates(args.instructions),
+		...args.requestOptions,
 	};
 }
 
