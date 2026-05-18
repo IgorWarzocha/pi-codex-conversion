@@ -1,9 +1,9 @@
-import { generateSummary, type ExtensionAPI, type ExtensionContext, type SessionBeforeCompactEvent } from "@earendil-works/pi-coding-agent";
+import { compact as compactWithPiSummary, generateSummary, type ExtensionAPI, type ExtensionContext, type SessionBeforeCompactEvent } from "@earendil-works/pi-coding-agent";
 import { clampThinkingLevel, type ModelThinkingLevel, type Tool } from "@earendil-works/pi-ai";
 import { executeNativeCompaction } from "./compact-client.ts";
 import { extractCompactionSummaryText, hasCompactionOutputItem, sanitizeCompactedWindow, summarizeCompactionOutputForDiagnostics } from "./compaction-output.ts";
 import { resolveLatestNativeCompactionEntry } from "./details-store.ts";
-import { rewriteResponsesPayloadWithNativeReplay, serializeLiveTailToResponsesInput } from "./payload-rewrite.ts";
+import { collectReplayMessages, rewriteResponsesPayloadWithNativeReplay, serializeLiveTailToResponsesInput } from "./payload-rewrite.ts";
 import { resolveNativeCompactionEnvironment } from "./compaction-runtime.ts";
 import { convertResponsesTools } from "../providers/openai-responses-shared.ts";
 import {
@@ -148,6 +148,8 @@ async function handleCodexSessionBeforeCompactInner(event: SessionBeforeCompactE
 	});
 
 	let request: NativeCompactionRequestBody;
+	let compactedKeptWindow = false;
+	let humanSummaryMessages = event.preparation.messagesToSummarize;
 	if (latestNativeCompaction.ok) {
 		const compactedWindow = cloneCompactedWindow(latestNativeCompaction.entry.details?.compactedWindow ?? []);
 		if (!compactedWindow) {
@@ -182,6 +184,17 @@ async function handleCodexSessionBeforeCompactInner(event: SessionBeforeCompactE
 			instructions: buildCompactionInstructions(ctx.getSystemPrompt(), event.customInstructions),
 			requestOptions,
 		});
+		if (request.input.length === 0) {
+			const branchMessages = collectReplayMessages(branchEntries);
+			request = {
+				model: compactionModel,
+				input: serializeLiveTailToResponsesInput({ model: runtime.currentModel, entries: branchEntries }),
+				instructions: buildCompactionInstructions(ctx.getSystemPrompt(), event.customInstructions),
+				...requestOptions,
+			};
+			compactedKeptWindow = true;
+			humanSummaryMessages = branchMessages;
+		}
 	} else {
 		void getCompactionIdentity(latestNativeCompaction.latestCompaction);
 		request = serializeCompactionPreparationToRequest({
@@ -190,10 +203,21 @@ async function handleCodexSessionBeforeCompactInner(event: SessionBeforeCompactE
 			instructions: buildCompactionInstructions(ctx.getSystemPrompt(), event.customInstructions),
 			requestOptions,
 		});
+		if (request.input.length === 0) {
+			const branchMessages = collectReplayMessages(branchEntries);
+			request = {
+				model: compactionModel,
+				input: serializeLiveTailToResponsesInput({ model: runtime.currentModel, entries: branchEntries }),
+				instructions: buildCompactionInstructions(ctx.getSystemPrompt(), event.customInstructions),
+				...requestOptions,
+			};
+			compactedKeptWindow = true;
+			humanSummaryMessages = branchMessages;
+		}
 	}
 
 	if (request.input.length === 0) {
-		ctx.ui.notify("OpenAI native compaction had no messages selected for compaction; Pi compaction was not run.", "error");
+		ctx.ui.notify("OpenAI native compaction had no serializable conversation items; Pi compaction was not run.", "error");
 		return { cancel: true };
 	}
 
@@ -221,7 +245,7 @@ async function handleCodexSessionBeforeCompactInner(event: SessionBeforeCompactE
 	let humanSummary: string;
 	try {
 		humanSummary = await generateSummary(
-			event.preparation.messagesToSummarize,
+			humanSummaryMessages,
 			runtime.currentModel,
 			event.preparation.settings.reserveTokens,
 			runtime.apiKey,
@@ -251,7 +275,7 @@ async function handleCodexSessionBeforeCompactInner(event: SessionBeforeCompactE
 			compactedWindow,
 			compactResponseId: compactResult.compactResponseId,
 			createdAt: compactResult.createdAt,
-			requestMeta: { tokensBefore: event.preparation.tokensBefore, previousSummaryPresent: Boolean(event.preparation.previousSummary) },
+			requestMeta: { tokensBefore: event.preparation.tokensBefore, previousSummaryPresent: Boolean(event.preparation.previousSummary), compactedKeptWindow },
 		});
 		return { compaction: createNativeCompactionShimResult({ summary: humanSummary, firstKeptEntryId: event.preparation.firstKeptEntryId, tokensBefore: event.preparation.tokensBefore, details }) };
 	} catch {

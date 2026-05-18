@@ -10,6 +10,7 @@ export type NativeCompactionShimSummary = typeof NATIVE_COMPACTION_SHIM_SUMMARY;
 export type NativeCompactionRequestMeta = {
 	tokensBefore?: number;
 	previousSummaryPresent?: boolean;
+	compactedKeptWindow?: boolean;
 };
 
 export type NativeCompactionIdentity = {
@@ -182,6 +183,9 @@ export function createNativeCompactionDetails(input: CreateNativeCompactionDetai
 				...(input.requestMeta.tokensBefore !== undefined ? { tokensBefore: input.requestMeta.tokensBefore } : {}),
 				...(input.requestMeta.previousSummaryPresent !== undefined
 					? { previousSummaryPresent: input.requestMeta.previousSummaryPresent }
+					: {}),
+				...(input.requestMeta.compactedKeptWindow !== undefined
+					? { compactedKeptWindow: input.requestMeta.compactedKeptWindow }
 					: {}),
 			}
 			: undefined,

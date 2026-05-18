@@ -307,7 +307,7 @@ export function extractFreshAuthoritativePreamble(
 	};
 }
 
-function collectReplayMessages(entries: readonly SessionEntry[]): AgentMessage[] {
+export function collectReplayMessages(entries: readonly SessionEntry[]): AgentMessage[] {
 	const messages: AgentMessage[] = [];
 
 	for (const entry of entries) {
@@ -512,7 +512,7 @@ function buildNativeReplaySegmentsInternal<TApi extends Api>(args: {
 			replayInput: [
 				...freshPreamble.leadingInput,
 				...compactedWindow,
-				...actualPreCompactionKeptWindow,
+				...(args.compactionEntry.details?.requestMeta?.compactedKeptWindow ? [] : actualPreCompactionKeptWindow),
 				...actualPostCompactionTail,
 				...freshPreamble.trailingInput,
 			],
@@ -523,7 +523,7 @@ function buildNativeReplaySegmentsInternal<TApi extends Api>(args: {
 			input: [
 				...freshPreamble.leadingInput,
 				...compactedWindow,
-				...actualPreCompactionKeptWindow,
+				...(args.compactionEntry.details?.requestMeta?.compactedKeptWindow ? [] : actualPreCompactionKeptWindow),
 				...actualPostCompactionTail,
 				...freshPreamble.trailingInput,
 			],
