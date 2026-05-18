@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { applyCodexRequestParams, getCodexConversionConfigPath, writeCodexConversionConfig } from "../src/adapter/config.ts";
+import { DEFAULT_CODEX_CONVERSION_CONFIG, applyCodexRequestParams, getCodexConversionConfigPath, writeCodexConversionConfig } from "../src/adapter/config.ts";
 import { syncAdapter } from "../src/adapter/activation.ts";
 import type { AdapterState } from "../src/adapter/state.ts";
 import { buildStatusText } from "../src/adapter/tool-set.ts";
@@ -24,7 +24,7 @@ function createAdapterState(overrides: Partial<AdapterState["config"]> = {}): Ad
 		enabled: false,
 		cwd: process.cwd(),
 		promptSkills: [],
-		config: { fast: false, imageGeneration: false, statusLine: true, useOnAllModels: false, webSearch: false, verbosity: "low", ...overrides },
+		config: { ...DEFAULT_CODEX_CONVERSION_CONFIG, imageGeneration: false, webSearch: false, ...overrides },
 	};
 }
 
@@ -135,11 +135,15 @@ test("buildStatusText includes verbosity plus enabled web search and fast flags"
 		buildStatusText({ webSearch: false, imageGeneration: false, fast: false, useOnAllModels: true }),
 		"\u001b[38;2;0;76;255mCodex adapter\u001b[0m • all models",
 	);
+	assert.equal(
+		buildStatusText({ verbosity: "high", webSearch: false, imageGeneration: false, fast: false, useOnAllModels: false, compaction: { enabled: true, model: "gpt-5.4-mini", reasoning: "low" } }),
+		"\u001b[38;2;0;76;255mCodex adapter\u001b[0m V: hi • compact gpt-5.4-mini/low",
+	);
 });
 
 test("applyCodexRequestParams patches verbosity and priority service tier", () => {
 	assert.deepEqual(
-		applyCodexRequestParams({ input: "hello", text: { format: { type: "text" } } }, { fast: true, imageGeneration: true, statusLine: true, useOnAllModels: false, webSearch: true, verbosity: "high" }),
+		applyCodexRequestParams({ input: "hello", text: { format: { type: "text" } } }, { ...DEFAULT_CODEX_CONVERSION_CONFIG, fast: true, imageGeneration: true, statusLine: true, useOnAllModels: false, webSearch: true, verbosity: "high" }),
 		{
 			input: "hello",
 			service_tier: "priority",
@@ -152,7 +156,7 @@ test("applyCodexRequestParams can apply verbosity without priority service tier"
 	assert.deepEqual(
 		applyCodexRequestParams(
 			{ input: "hello" },
-			{ fast: true, imageGeneration: true, statusLine: true, useOnAllModels: true, webSearch: true, verbosity: "medium" },
+			{ ...DEFAULT_CODEX_CONVERSION_CONFIG, fast: true, imageGeneration: true, statusLine: true, useOnAllModels: true, webSearch: true, verbosity: "medium" },
 			{ serviceTier: false, verbosity: true },
 		),
 		{ input: "hello", text: { verbosity: "medium" } },
@@ -169,7 +173,7 @@ test("writeCodexConversionConfig reports write failures", () => {
 		const blockedPath = join(root, "blocked");
 		writeFileSync(blockedPath, "not a directory");
 		const result = writeCodexConversionConfig(
-			{ fast: false, imageGeneration: true, statusLine: true, useOnAllModels: false, webSearch: true, verbosity: "low" },
+			{ ...DEFAULT_CODEX_CONVERSION_CONFIG, fast: false, imageGeneration: true, statusLine: true, useOnAllModels: false, webSearch: true, verbosity: "low" },
 			join(blockedPath, "pi-codex-conversion.json"),
 		);
 		assert.equal(result.ok, false);
@@ -183,7 +187,7 @@ test("writeCodexConversionConfig reports successful writes", () => {
 	try {
 		const configPath = join(root, "pi-codex-conversion.json");
 		const result = writeCodexConversionConfig(
-			{ fast: true, imageGeneration: false, statusLine: false, useOnAllModels: true, webSearch: false, verbosity: "high" },
+			{ ...DEFAULT_CODEX_CONVERSION_CONFIG, fast: true, imageGeneration: false, statusLine: false, useOnAllModels: true, webSearch: false, verbosity: "high" },
 			configPath,
 		);
 		assert.equal(result.ok, true);

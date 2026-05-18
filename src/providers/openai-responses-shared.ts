@@ -40,6 +40,8 @@ interface ConvertResponsesToolsOptions {
 	strict?: boolean | null;
 }
 
+export const CODEX_TOOL_CALL_PROVIDERS = new Set(["openai", "openai-codex", "opencode"]);
+
 function shortHash(str: string): string {
 	let h1 = 0xdeadbeef;
 	let h2 = 0x41c6ce57;

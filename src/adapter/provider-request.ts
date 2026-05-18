@@ -5,8 +5,9 @@ import type { AdapterState } from "./state.ts";
 import { rewriteNativeImageGenerationTool } from "../tools/image-generation-tool.ts";
 import { rewriteNativeWebSearchTool } from "../tools/web-search-tool.ts";
 import { shouldUseCodexAdapter } from "./activation.ts";
+import { rewriteCodexCompactedProviderRequest } from "./compaction.ts";
 
-export function rewriteCodexProviderRequest(payload: unknown, ctx: ExtensionContext, state: AdapterState): unknown | undefined {
+export async function rewriteCodexProviderRequest(payload: unknown, ctx: ExtensionContext, state: AdapterState): Promise<unknown | undefined> {
 	if (!shouldUseCodexAdapter(ctx, state.config) || (!isOpenAICodexContext(ctx) && !isResponsesContext(ctx))) {
 		return undefined;
 	}
@@ -16,8 +17,9 @@ export function rewriteCodexProviderRequest(payload: unknown, ctx: ExtensionCont
 	const imageGenerationPayload = isOpenAICodex && state.config.imageGeneration
 		? rewriteNativeImageGenerationTool(webSearchPayload, ctx.model)
 		: webSearchPayload;
-	return applyCodexRequestParams(imageGenerationPayload, state.config, {
+	const configuredPayload = applyCodexRequestParams(imageGenerationPayload, state.config, {
 		serviceTier: isOpenAICodex,
 		verbosity: true,
 	});
+	return (await rewriteCodexCompactedProviderRequest(configuredPayload, ctx, state)) ?? configuredPayload;
 }

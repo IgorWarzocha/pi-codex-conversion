@@ -9,7 +9,8 @@ import { syncAdapter } from "../adapter/activation.ts";
 import type { AdapterState } from "../adapter/state.ts";
 import { openCodexSettingsScreen } from "./ui.ts";
 
-const CODEX_COMMAND_COMPLETIONS = ["all", "status", "fast", "search", "image", "low", "medium", "high"] as const;
+const CODEX_COMMAND_COMPLETIONS = ["all", "status", "fast", "search", "image", "compact", "low", "medium", "high"] as const;
+const CODEX_USAGE = "Usage: /codex, /codex all, /codex status, /codex fast, /codex search, /codex image, /codex compact, /codex low|medium|high";
 
 export function registerCodexCommand(pi: ExtensionAPI, state: AdapterState, onConfigApplied?: (config: CodexConversionConfig) => void): void {
 	function saveAndApply(ctx: ExtensionContext, nextConfig: CodexConversionConfig): boolean {
@@ -31,6 +32,18 @@ export function registerCodexCommand(pi: ExtensionAPI, state: AdapterState, onCo
 		handler: async (args, ctx) => {
 			state.config = readCodexConversionConfig();
 			const arg = args.trim().toLowerCase();
+			if (arg === "compact") {
+				if (!ctx.hasUI) {
+					ctx.ui.notify(formatCodexSettings(state.config), "info");
+					return;
+				}
+				await openCodexSettingsScreen(ctx, {
+					initialConfig: state.config,
+					initialTab: "compaction",
+					onChange: (config) => saveAndApply(ctx, config),
+				});
+				return;
+			}
 			const nextConfig = getCommandConfigUpdate(arg, state.config);
 			if (nextConfig) {
 				saveAndApply(ctx, nextConfig);
@@ -38,7 +51,7 @@ export function registerCodexCommand(pi: ExtensionAPI, state: AdapterState, onCo
 			}
 
 			if (arg) {
-				ctx.ui.notify("Usage: /codex, /codex all, /codex status, /codex fast, /codex search, /codex image, /codex low|medium|high", "warning");
+				ctx.ui.notify(CODEX_USAGE, "warning");
 				return;
 			}
 
@@ -66,5 +79,5 @@ function getCommandConfigUpdate(arg: string, config: CodexConversionConfig): Cod
 }
 
 function formatCodexSettings(config: CodexConversionConfig): string {
-	return `Codex settings: all models ${config.useOnAllModels ? "on" : "off"}, statusline ${config.statusLine ? "on" : "off"}, fast ${config.fast ? "on" : "off"}, web search ${config.webSearch ? "on" : "off"}, image generation ${config.imageGeneration ? "on" : "off"}, verbosity ${config.verbosity}`;
+	return `Codex settings: all models ${config.useOnAllModels ? "on" : "off"}, statusline ${config.statusLine ? "on" : "off"}, fast ${config.fast ? "on" : "off"}, web search ${config.webSearch ? "on" : "off"}, image generation ${config.imageGeneration ? "on" : "off"}, responses compaction ${(config.responsesCompaction ?? false) ? "on" : "off"} (${config.compactionModel}/${config.compactionReasoning}), verbosity ${config.verbosity}`;
 }
