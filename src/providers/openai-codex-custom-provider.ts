@@ -20,6 +20,7 @@ import {
 	CODEX_TOOL_CALL_PROVIDERS,
 	processResponsesStream,
 } from "./openai-responses-shared.ts";
+import { WEB_SEARCH_TOOL_NAME } from "../adapter/tool-set.ts";
 
 const DEFAULT_CODEX_BASE_URL = "https://chatgpt.com/backend-api";
 const JWT_CLAIM_PATH = "https://api.openai.com/auth";
@@ -550,7 +551,7 @@ export function buildRequestBody<TApi extends Api>(model: Model<TApi>, context: 
 
 	if (context.tools && context.tools.length > 0) {
 		body.tools = convertResponsesTools(context.tools, { strict: null });
-		const hasWebSearchTool = context.tools.some((tool) => tool.name === "web_search");
+		const hasWebSearchTool = context.tools.some((tool) => tool.name === WEB_SEARCH_TOOL_NAME);
 		if (hasWebSearchTool) {
 			body.include.push("web_search_call.action.sources", "web_search_call.results");
 		}

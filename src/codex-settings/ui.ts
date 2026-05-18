@@ -17,9 +17,9 @@ export interface CodexSettingsScreenOptions {
 	initialTab?: SettingsTab;
 }
 
-type SettingsTab = "general" | "compaction";
+type SettingsTab = "general" | "compaction" | "overrides";
 
-const TAB_ORDER: readonly SettingsTab[] = ["general", "compaction"];
+const TAB_ORDER: readonly SettingsTab[] = ["general", "compaction", "overrides"];
 
 export async function openCodexSettingsScreen(ctx: ExtensionContext, options: CodexSettingsScreenOptions): Promise<void> {
 	let draft = { ...options.initialConfig };
@@ -46,6 +46,7 @@ export async function openCodexSettingsScreen(ctx: ExtensionContext, options: Co
 					formatTabs(activeTab, theme),
 					rule(width, theme, "borderMuted"),
 					...(activeTab === "compaction" ? formatCompactionNotes(theme) : []),
+					...(activeTab === "overrides" ? formatOverridesNotes(theme) : []),
 					"",
 					...settingsList.render(width),
 					rule(width, theme, "borderMuted"),
@@ -71,6 +72,12 @@ function formatCompactionNotes(theme: Theme): string[] {
 	return [
 		theme.fg("dim", "  Beta: native OpenAI Responses compaction is experimental. Please report any issues."),
 		theme.fg("error", "  Warning: do not turn this off mid-session; old context may be much less reliable."),
+	];
+}
+
+function formatOverridesNotes(theme: Theme): string[] {
+	return [
+		theme.fg("dim", "  Advanced tool-surface overrides."),
 	];
 }
 
@@ -110,6 +117,12 @@ function buildItems(tab: SettingsTab, draft: CodexConversionConfig): SettingItem
 		];
 	}
 
+	if (tab === "overrides") {
+		return [
+			{ id: "applyPatchOnly", label: "Apply patch only", currentValue: draft.applyPatchOnly ? "on" : "off", values: ["off", "on"] },
+		];
+	}
+
 	return [
 		{ id: "useOnAllModels", label: "Use on all models", currentValue: draft.useOnAllModels ? "on" : "off", values: ["off", "on"] },
 		{ id: "statusLine", label: "Statusline", currentValue: draft.statusLine ? "on" : "off", values: ["off", "on"] },
@@ -122,6 +135,7 @@ function buildItems(tab: SettingsTab, draft: CodexConversionConfig): SettingItem
 
 function applySettingChange(id: string, value: string, draft: CodexConversionConfig): CodexConversionConfig {
 	const nextDraft = { ...draft };
+	if (id === "applyPatchOnly") nextDraft.applyPatchOnly = value === "on";
 	if (id === "useOnAllModels") nextDraft.useOnAllModels = value === "on";
 	if (id === "statusLine") nextDraft.statusLine = value === "on";
 	if (id === "fast") nextDraft.fast = value === "on";
@@ -136,7 +150,7 @@ function applySettingChange(id: string, value: string, draft: CodexConversionCon
 
 function formatTabs(activeTab: SettingsTab, theme: Theme): string {
 	const renderTab = (tab: SettingsTab, label: string) => activeTab === tab ? theme.bold(label) : theme.fg("dim", label);
-	return `  ${renderTab("general", "General")}  ${theme.fg("dim", "/")}  ${renderTab("compaction", "Compaction")}`;
+	return `  ${renderTab("general", "General")}  ${theme.fg("dim", "/")}  ${renderTab("compaction", "Compaction")}  ${theme.fg("dim", "/")}  ${renderTab("overrides", "Overrides")}`;
 }
 
 function formatLinks(theme: Theme): string[] {

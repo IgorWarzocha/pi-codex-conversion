@@ -18,7 +18,7 @@ test("rewriteNativeWebSearchTool replaces the adapter function tool with the nat
 		model: "gpt-5.4",
 		tools: [
 			{ type: "function", name: "exec_command", parameters: { type: "object" } },
-			{ type: "function", name: "web_search", parameters: { type: "object" } },
+			{ type: "function", name: "web.run", parameters: { type: "object" } },
 		],
 	};
 
@@ -26,6 +26,7 @@ test("rewriteNativeWebSearchTool replaces the adapter function tool with the nat
 		rewriteNativeWebSearchTool(payload, { provider: "openai-codex", api: "openai-codex-responses", id: "gpt-5.4" } as never),
 		{
 			model: "gpt-5.4",
+			include: ["web_search_call.action.sources", "web_search_call.results"],
 			tools: [
 				{ type: "function", name: "exec_command", parameters: { type: "object" } },
 				{ type: "web_search", external_web_access: true, search_content_types: ["text", "image"] },
@@ -37,7 +38,7 @@ test("rewriteNativeWebSearchTool replaces the adapter function tool with the nat
 test("rewriteNativeWebSearchTool leaves spark models text-only", () => {
 	const payload = {
 		model: "gpt-5.3-codex-spark",
-		tools: [{ type: "function", name: "web_search", parameters: { type: "object" } }],
+		tools: [{ type: "function", name: "web.run", parameters: { type: "object" } }],
 	};
 
 	assert.deepEqual(
@@ -47,6 +48,7 @@ test("rewriteNativeWebSearchTool leaves spark models text-only", () => {
 		),
 		{
 			model: "gpt-5.3-codex-spark",
+			include: ["web_search_call.action.sources", "web_search_call.results"],
 			tools: [{ type: "web_search", external_web_access: true }],
 		},
 	);
@@ -55,7 +57,7 @@ test("rewriteNativeWebSearchTool leaves spark models text-only", () => {
 test("rewriteNativeWebSearchTool leaves other providers untouched", () => {
 	const payload = {
 		model: "gpt-5",
-		tools: [{ type: "function", name: "web_search", parameters: { type: "object" } }],
+		tools: [{ type: "function", name: "web.run", parameters: { type: "object" } }],
 	};
 
 	assert.equal(
