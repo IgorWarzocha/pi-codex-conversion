@@ -41,13 +41,15 @@ export async function openCodexSettingsScreen(ctx: ExtensionContext, options: Co
 		return {
 			render: (width: number) =>
 				[
+					rule(width, theme, "accent"),
 					formatTabs(activeTab, theme),
+					rule(width, theme, "borderMuted"),
 					...(activeTab === "compaction" ? [theme.fg("dim", "  Beta: native OpenAI Responses compaction is experimental. Please report any issues.")] : []),
 					"",
 					...settingsList.render(width),
-					"",
+					rule(width, theme, "borderMuted"),
 					...formatLinks(theme),
-					"",
+					rule(width, theme, "accent"),
 					theme.fg("dim", "  Tab to switch sections · g/c/d/i open links"),
 				].map((line) => truncateToWidth(line, width, "")),
 			invalidate: () => settingsList.invalidate(),
@@ -62,6 +64,10 @@ export async function openCodexSettingsScreen(ctx: ExtensionContext, options: Co
 			},
 		};
 	});
+}
+
+function rule(width: number, theme: Theme, color: "accent" | "borderMuted"): string {
+	return theme.fg(color, "─".repeat(Math.max(0, width)));
 }
 
 function createSettingsList(
