@@ -56,23 +56,6 @@ export function extractCompactionSummaryText(compactedWindow: readonly unknown[]
 	return undefined;
 }
 
-export function extractHumanReadableCompactionSummary(compactedWindow: readonly unknown[]): string | undefined {
-	const chunks: string[] = [];
-	for (const item of compactedWindow) {
-		if (!isRecord(item) || item.type !== "message" || !Array.isArray(item.content)) continue;
-		for (const content of item.content) {
-			if (!isRecord(content)) continue;
-			if ((content.type === "input_text" || content.type === "output_text") && typeof content.text === "string") {
-				const text = content.text.trim();
-				if (text) chunks.push(text);
-			}
-		}
-	}
-
-	const summary = chunks.join("\n\n").trim();
-	return summary.length > 0 ? summary : undefined;
-}
-
 export function hasCompactionOutputItem(compactedWindow: readonly unknown[]): boolean {
 	return compactedWindow.some((item) => isRecord(item) && typeof item.type === "string" && COMPACTION_ITEM_TYPES.has(item.type));
 }

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { extractCompactionSummaryText, extractHumanReadableCompactionSummary, hasCompactionOutputItem, sanitizeCompactedWindow, shouldKeepCompactedOutputItem } from "../src/adapter/compaction-output.ts";
+import { extractCompactionSummaryText, hasCompactionOutputItem, sanitizeCompactedWindow, shouldKeepCompactedOutputItem } from "../src/adapter/compaction-output.ts";
 
 test("sanitizeCompactedWindow keeps only Codex-installable compact output", () => {
 	const assistant = { type: "message", role: "assistant", id: "msg_1", content: [{ type: "output_text", text: "summary", annotations: [] }] };
@@ -53,17 +53,6 @@ test("extractCompactionSummaryText prefers explicit compaction content", () => {
 			{ type: "compaction", encrypted_content: "sealed" },
 		]),
 		"sealed",
-	);
-});
-
-test("extractHumanReadableCompactionSummary uses compacted transcript text", () => {
-	assert.equal(
-		extractHumanReadableCompactionSummary([
-			{ type: "message", role: "user", content: [{ type: "input_text", text: "Original requirement" }] },
-			{ type: "message", role: "assistant", content: [{ type: "output_text", text: "Implemented the feature" }] },
-			{ type: "compaction_summary", encrypted_content: "qAAAA" },
-		]),
-		"Original requirement\n\nImplemented the feature",
 	);
 });
 

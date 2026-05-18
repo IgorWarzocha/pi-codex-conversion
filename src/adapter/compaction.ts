@@ -1,7 +1,7 @@
-import type { ExtensionAPI, ExtensionContext, SessionBeforeCompactEvent } from "@earendil-works/pi-coding-agent";
+import { generateSummary, type ExtensionAPI, type ExtensionContext, type SessionBeforeCompactEvent } from "@earendil-works/pi-coding-agent";
 import { clampThinkingLevel, type ModelThinkingLevel, type Tool } from "@earendil-works/pi-ai";
 import { executeNativeCompaction } from "./compact-client.ts";
-import { extractCompactionSummaryText, extractHumanReadableCompactionSummary, hasCompactionOutputItem, sanitizeCompactedWindow, summarizeCompactionOutputForDiagnostics } from "./compaction-output.ts";
+import { extractCompactionSummaryText, hasCompactionOutputItem, sanitizeCompactedWindow, summarizeCompactionOutputForDiagnostics } from "./compaction-output.ts";
 import { resolveLatestNativeCompactionEntry } from "./details-store.ts";
 import { rewriteResponsesPayloadWithNativeReplay, serializeLiveTailToResponsesInput } from "./payload-rewrite.ts";
 import { resolveNativeCompactionEnvironment } from "./compaction-runtime.ts";
@@ -192,6 +192,11 @@ async function handleCodexSessionBeforeCompactInner(event: SessionBeforeCompactE
 		});
 	}
 
+	if (request.input.length === 0) {
+		ctx.ui.notify("OpenAI native compaction had no messages selected for compaction; Pi compaction was not run.", "error");
+		return { cancel: true };
+	}
+
 	const compactResult = await executeNativeCompaction({ runtime, request, signal: event.signal });
 	if (!compactResult.ok) {
 		if (compactResult.reason !== "aborted") {
@@ -213,11 +218,29 @@ async function handleCodexSessionBeforeCompactInner(event: SessionBeforeCompactE
 		ctx.ui.notify(`OpenAI native compaction returned compacted context without a displayable summary; Pi compaction was not run. Response=${compactResult.compactResponseId ?? "<none>"}. Request: ${formatCompactRequestDiagnostics(request)}. Output: ${summarizeCompactionOutputForDiagnostics(compactResult.compactedWindow, compactedWindow)}`, "error");
 		return { cancel: true };
 	}
-	const humanSummary = extractHumanReadableCompactionSummary(compactedWindow);
-	if (!humanSummary) {
-		ctx.ui.notify(`OpenAI native compaction returned encrypted state but no human-readable compacted transcript; Pi compaction was not run. Response=${compactResult.compactResponseId ?? "<none>"}. Request: ${formatCompactRequestDiagnostics(request)}. Output: ${summarizeCompactionOutputForDiagnostics(compactResult.compactedWindow, compactedWindow)}`, "error");
+	let humanSummary: string;
+	try {
+		humanSummary = await generateSummary(
+			event.preparation.messagesToSummarize,
+			runtime.currentModel,
+			event.preparation.settings.reserveTokens,
+			runtime.apiKey,
+			runtime.headers,
+			event.signal,
+			event.customInstructions,
+			event.preparation.previousSummary,
+			pi.getThinkingLevel(),
+		);
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		ctx.ui.notify(`OpenAI native compaction produced encrypted state, but human-readable summary generation failed (${message}); Pi compaction was not run.`, "error");
 		return { cancel: true };
 	}
+	if (!humanSummary.trim()) {
+		ctx.ui.notify("OpenAI native compaction produced encrypted state, but human-readable summary generation was empty; Pi compaction was not run.", "error");
+		return { cancel: true };
+	}
+	humanSummary = humanSummary.trim();
 
 	try {
 		const details = createNativeCompactionDetails({
