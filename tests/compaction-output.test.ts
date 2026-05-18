@@ -44,17 +44,23 @@ test("shouldKeepCompactedOutputItem rejects malformed and non-installable items"
 	assert.equal(shouldKeepCompactedOutputItem(null), false);
 });
 
-test("extractCompactionSummaryText prefers assistant compact summary text", () => {
+test("extractCompactionSummaryText prefers explicit compaction content", () => {
 	assert.equal(
 		extractCompactionSummaryText([
 			{ type: "message", role: "user", content: [{ type: "input_text", text: "prior user" }] },
 			{ type: "message", role: "assistant", content: [{ type: "output_text", text: "Codex compact summary" }] },
 			{ type: "compaction", encrypted_content: "sealed" },
 		]),
-		"Codex compact summary",
+		"sealed",
 	);
 });
 
-test("extractCompactionSummaryText falls back to compaction encrypted content", () => {
-	assert.equal(extractCompactionSummaryText([{ type: "compaction", encrypted_content: "sealed summary" }]), "sealed summary");
+test("extractCompactionSummaryText does not present an arbitrary retained assistant turn as a summary", () => {
+	assert.equal(
+		extractCompactionSummaryText([
+			{ type: "message", role: "assistant", content: [{ type: "output_text", text: "retained assistant turn" }] },
+			{ type: "message", role: "user", content: [{ type: "input_text", text: "retained user turn" }] },
+		]),
+		"OpenAI native compaction completed. Compacted context contains 2 messages (1 user, 1 assistant).",
+	);
 });
