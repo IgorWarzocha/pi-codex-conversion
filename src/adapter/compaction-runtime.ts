@@ -40,7 +40,7 @@ export type NativeCompactionRuntime = {
 	apiFamily: DefaultSupportedApi;
 	model: string;
 	baseUrl: string;
-	apiKey: string;
+	apiKey?: string;
 	headers?: Record<string, string>;
 	compactPath: string;
 	compactUrl: string;
@@ -235,7 +235,8 @@ export async function resolveNativeCompactionEnvironment(
 	}
 
 	const { apiKey, headers } = await resolveRequestAuth(ctx, currentModel);
-	if (!apiKey) {
+	const hasAuthorizationHeader = Object.entries(headers ?? {}).some(([key, value]) => key.toLowerCase() === "authorization" && value.trim().length > 0);
+	if (!apiKey && !hasAuthorizationHeader) {
 		return {
 			ok: false,
 			reason: "missing-api-key",

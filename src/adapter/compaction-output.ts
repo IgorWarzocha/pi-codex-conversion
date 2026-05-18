@@ -1,4 +1,3 @@
-const KEEP_MESSAGE_ROLES = new Set(["assistant", "user"]);
 const COMPACTION_ITEM_TYPES = new Set(["compaction", "compaction_summary"]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -31,11 +30,7 @@ function cloneCompactedOutputItem(item: Record<string, unknown>): Record<string,
 }
 
 export function shouldKeepCompactedOutputItem(item: unknown): item is Record<string, unknown> {
-	if (!isRecord(item) || typeof item.type !== "string") return false;
-	if (item.type === "message") {
-		return typeof item.role === "string" && KEEP_MESSAGE_ROLES.has(item.role);
-	}
-	return COMPACTION_ITEM_TYPES.has(item.type);
+	return isRecord(item) && typeof item.type === "string";
 }
 
 export function sanitizeCompactedWindow(output: readonly unknown[]): Record<string, unknown>[] {

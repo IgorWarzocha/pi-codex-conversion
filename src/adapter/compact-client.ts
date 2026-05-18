@@ -115,6 +115,12 @@ function buildCodexUserAgent(): string {
 	return `pi (${platform}; ${arch})`;
 }
 
+function extractBearerToken(headers: Headers): string | undefined {
+	const authorization = headers.get("authorization")?.trim();
+	const match = authorization?.match(/^Bearer\s+(.+)$/i);
+	return match?.[1]?.trim() || undefined;
+}
+
 function toHeaders(runtime: NativeCompactionRuntime): Record<string, string> {
 	const headers = new Headers(runtime.currentModel.headers ?? {});
 	for (const [key, value] of Object.entries(runtime.headers ?? {})) {
@@ -122,12 +128,12 @@ function toHeaders(runtime: NativeCompactionRuntime): Record<string, string> {
 	}
 	headers.set("accept", JSON_CONTENT_TYPE);
 	headers.set("content-type", JSON_CONTENT_TYPE);
-	if (!headers.has("authorization")) {
+	if (runtime.apiKey) {
 		headers.set("authorization", `Bearer ${runtime.apiKey}`);
 	}
 
 	if (runtime.provider === "openai-codex") {
-		const accountId = extractCodexAccountId(runtime.apiKey);
+		const accountId = extractCodexAccountId(runtime.apiKey ?? extractBearerToken(headers) ?? "");
 		if (accountId) {
 			headers.set("chatgpt-account-id", accountId);
 		}

@@ -133,6 +133,7 @@ async function handleCodexSessionBeforeCompactInner(event: SessionBeforeCompactE
 
 	const runtime = resolution.runtime;
 	const compactionModel = state.config.compactionModel;
+	const compactionTargetModel = { ...runtime.currentModel, id: compactionModel };
 	const requestOptions = buildCompactionRequestOptions(pi, ctx, state, compactionModel);
 	const branchEntries = ctx.sessionManager.getBranch();
 	const latestNativeCompaction = resolveLatestNativeCompactionEntry(branchEntries, {
@@ -154,14 +155,14 @@ async function handleCodexSessionBeforeCompactInner(event: SessionBeforeCompactE
 			model: compactionModel,
 			input: [
 				...compactedWindow,
-				...serializeLiveTailToResponsesInput({ model: runtime.currentModel, entries: liveTailEntries }),
+				...serializeLiveTailToResponsesInput({ model: compactionTargetModel, entries: liveTailEntries }),
 			],
 			instructions: buildCompactionInstructions(ctx.getSystemPrompt(), event.customInstructions),
 			...requestOptions,
 		};
 	} else if (latestNativeCompaction.reason === "no-compaction") {
 		request = serializeCompactionPreparationToRequest({
-			model: { ...runtime.currentModel, id: compactionModel },
+			model: compactionTargetModel,
 			preparation: event.preparation,
 			instructions: buildCompactionInstructions(ctx.getSystemPrompt(), event.customInstructions),
 			requestOptions,
@@ -169,7 +170,7 @@ async function handleCodexSessionBeforeCompactInner(event: SessionBeforeCompactE
 		if (request.input.length === 0) {
 			request = {
 				model: compactionModel,
-				input: serializeLiveTailToResponsesInput({ model: runtime.currentModel, entries: branchEntries }),
+				input: serializeLiveTailToResponsesInput({ model: compactionTargetModel, entries: branchEntries }),
 				instructions: buildCompactionInstructions(ctx.getSystemPrompt(), event.customInstructions),
 				...requestOptions,
 			};
@@ -178,7 +179,7 @@ async function handleCodexSessionBeforeCompactInner(event: SessionBeforeCompactE
 	} else {
 		void getCompactionIdentity(latestNativeCompaction.latestCompaction);
 		request = serializeCompactionPreparationToRequest({
-			model: { ...runtime.currentModel, id: compactionModel },
+			model: compactionTargetModel,
 			preparation: event.preparation,
 			instructions: buildCompactionInstructions(ctx.getSystemPrompt(), event.customInstructions),
 			requestOptions,
@@ -186,7 +187,7 @@ async function handleCodexSessionBeforeCompactInner(event: SessionBeforeCompactE
 		if (request.input.length === 0) {
 			request = {
 				model: compactionModel,
-				input: serializeLiveTailToResponsesInput({ model: runtime.currentModel, entries: branchEntries }),
+				input: serializeLiveTailToResponsesInput({ model: compactionTargetModel, entries: branchEntries }),
 				instructions: buildCompactionInstructions(ctx.getSystemPrompt(), event.customInstructions),
 				...requestOptions,
 			};
@@ -252,5 +253,9 @@ export async function rewriteCodexCompactedProviderRequest(payload: unknown, ctx
 	if (!latestNativeCompaction.ok) return undefined;
 	if (!runtime.payload) return undefined;
 	const rewrite = rewriteResponsesPayloadWithNativeReplay({ model: runtime.currentModel, payload: runtime.payload, branchEntries, compactionEntry: latestNativeCompaction.entry });
-	return rewrite.ok ? rewrite.rewrittenPayload : undefined;
+	if (rewrite.ok) return rewrite.rewrittenPayload;
+	const detail = rewrite.parity?.mismatches.slice(0, 3).join("; ");
+	const message = `OpenAI native compaction replay failed (${rewrite.reason})${detail ? `: ${detail}` : ""}; request was not sent with placeholder compaction context.`;
+	ctx.ui.notify(message, "error");
+	throw new Error(message);
 }
