@@ -1,6 +1,7 @@
 import type { ExtensionAPI, ExtensionContext, SessionBeforeCompactEvent } from "@earendil-works/pi-coding-agent";
 import { clampThinkingLevel, type ModelThinkingLevel, type Tool } from "@earendil-works/pi-ai";
 import { executeNativeCompaction } from "./compact-client.ts";
+import { sanitizeCompactedWindow } from "./compaction-output.ts";
 import { resolveLatestNativeCompactionEntry } from "./details-store.ts";
 import { rewriteResponsesPayloadWithNativeReplay, serializeLiveTailToResponsesInput } from "./payload-rewrite.ts";
 import { resolveNativeCompactionEnvironment } from "./compaction-runtime.ts";
@@ -124,6 +125,8 @@ export async function handleCodexSessionBeforeCompact(event: SessionBeforeCompac
 
 	const compactResult = await executeNativeCompaction({ runtime, request, signal: event.signal });
 	if (!compactResult.ok) return compactResult.reason === "aborted" ? { cancel: true } : undefined;
+	const compactedWindow = sanitizeCompactedWindow(compactResult.compactedWindow);
+	if (compactedWindow.length === 0) return undefined;
 
 	try {
 		const details = createNativeCompactionDetails({
@@ -131,7 +134,7 @@ export async function handleCodexSessionBeforeCompact(event: SessionBeforeCompac
 			api: runtime.api,
 			model: runtime.model,
 			baseUrl: runtime.baseUrl,
-			compactedWindow: compactResult.compactedWindow,
+			compactedWindow,
 			compactResponseId: compactResult.compactResponseId,
 			createdAt: compactResult.createdAt,
 			requestMeta: { tokensBefore: event.preparation.tokensBefore, previousSummaryPresent: Boolean(event.preparation.previousSummary) },
