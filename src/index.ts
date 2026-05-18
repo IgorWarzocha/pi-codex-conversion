@@ -18,6 +18,7 @@ import { ensureBundledApplyPatchOnPath } from "./tools/apply-patch-binary.ts";
 import { readCodexConversionConfig } from "./adapter/config.ts";
 import { syncAdapter, mergeAdapterTools, restoreTools, stripAdapterTools, shouldUseCodexAdapter } from "./adapter/activation.ts";
 import { rewriteCodexProviderRequest } from "./adapter/provider-request.ts";
+import { handleCodexSessionBeforeCompact } from "./adapter/compaction.ts";
 import { getCodexSkillPaths } from "./adapter/skills.ts";
 import type { AdapterState } from "./adapter/state.ts";
 import { registerCodexCommand } from "./codex-settings/command.ts";
@@ -136,6 +137,11 @@ export default function codexConversion(pi: ExtensionAPI) {
 	pi.on("before_provider_request", async (event, ctx) => {
 		state.cwd = ctx.cwd;
 		return rewriteCodexProviderRequest(event.payload, ctx, state);
+	});
+
+	pi.on("session_before_compact", async (event, ctx) => {
+		state.cwd = ctx.cwd;
+		return handleCodexSessionBeforeCompact(event, ctx, state);
 	});
 
 	pi.on("context", async (event) => {

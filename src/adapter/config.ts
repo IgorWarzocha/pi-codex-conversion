@@ -7,6 +7,7 @@ export type CodexVerbosity = "low" | "medium" | "high";
 export interface CodexConversionConfig {
 	fast: boolean;
 	imageGeneration: boolean;
+	responsesCompaction?: boolean;
 	statusLine: boolean;
 	useOnAllModels: boolean;
 	webSearch: boolean;
@@ -17,6 +18,7 @@ export const CODEX_CONVERSION_CONFIG_BASENAME = "pi-codex-conversion.json";
 export const DEFAULT_CODEX_CONVERSION_CONFIG: CodexConversionConfig = {
 	fast: false,
 	imageGeneration: true,
+	responsesCompaction: false,
 	statusLine: true,
 	useOnAllModels: false,
 	webSearch: true,
@@ -49,6 +51,7 @@ export function readCodexConversionConfig(configPath: string = getCodexConversio
 		return {
 			fast: typeof parsed.fast === "boolean" ? parsed.fast : DEFAULT_CODEX_CONVERSION_CONFIG.fast,
 			imageGeneration: typeof parsed.imageGeneration === "boolean" ? parsed.imageGeneration : DEFAULT_CODEX_CONVERSION_CONFIG.imageGeneration,
+			responsesCompaction: typeof parsed.responsesCompaction === "boolean" ? parsed.responsesCompaction : DEFAULT_CODEX_CONVERSION_CONFIG.responsesCompaction,
 			statusLine: typeof parsed.statusLine === "boolean" ? parsed.statusLine : DEFAULT_CODEX_CONVERSION_CONFIG.statusLine,
 			useOnAllModels: typeof parsed.useOnAllModels === "boolean" ? parsed.useOnAllModels : DEFAULT_CODEX_CONVERSION_CONFIG.useOnAllModels,
 			webSearch: typeof parsed.webSearch === "boolean" ? parsed.webSearch : DEFAULT_CODEX_CONVERSION_CONFIG.webSearch,

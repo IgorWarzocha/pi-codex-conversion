@@ -17,6 +17,7 @@ export async function openCodexSettingsScreen(ctx: ExtensionContext, options: Co
 			{ id: "fast", label: "Fast mode", currentValue: draft.fast ? "on" : "off", values: ["off", "on"] },
 			{ id: "webSearch", label: "Web search", currentValue: draft.webSearch ? "on" : "off", values: ["off", "on"] },
 			{ id: "imageGeneration", label: "Image generation", currentValue: draft.imageGeneration ? "on" : "off", values: ["off", "on"] },
+			{ id: "responsesCompaction", label: "Responses compaction", currentValue: (draft.responsesCompaction ?? false) ? "on" : "off", values: ["off", "on"] },
 			{ id: "verbosity", label: "Verbosity", currentValue: draft.verbosity, values: ["low", "medium", "high"] },
 		];
 
@@ -32,6 +33,7 @@ export async function openCodexSettingsScreen(ctx: ExtensionContext, options: Co
 			if (id === "fast") nextDraft.fast = value === "on";
 			if (id === "webSearch") nextDraft.webSearch = value === "on";
 			if (id === "imageGeneration") nextDraft.imageGeneration = value === "on";
+			if (id === "responsesCompaction") nextDraft.responsesCompaction = value === "on";
 			if (id === "verbosity") nextDraft.verbosity = normalizeCodexVerbosity(value) ?? DEFAULT_CODEX_CONVERSION_CONFIG.verbosity;
 			if (options.onChange(nextDraft)) {
 				draft = nextDraft;
