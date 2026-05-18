@@ -1,4 +1,4 @@
-const COMPACTION_ITEM_TYPES = new Set(["compaction", "compaction_summary"]);
+const COMPACTION_ITEM_TYPES = new Set(["compaction", "compaction_summary", "context_compaction"]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return !!value && typeof value === "object" && !Array.isArray(value);

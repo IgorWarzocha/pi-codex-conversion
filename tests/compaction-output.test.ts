@@ -75,4 +75,5 @@ test("hasCompactionOutputItem detects whether native compact returned a compacti
 	assert.equal(hasCompactionOutputItem([{ type: "message", role: "assistant" }]), false);
 	assert.equal(hasCompactionOutputItem([{ type: "compaction", encrypted_content: "sealed" }]), true);
 	assert.equal(hasCompactionOutputItem([{ type: "compaction_summary", encrypted_content: "sealed" }]), true);
+	assert.equal(hasCompactionOutputItem([{ type: "context_compaction", encrypted_content: "v2-only" }]), true);
 });

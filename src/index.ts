@@ -139,7 +139,7 @@ export default function codexConversion(pi: ExtensionAPI) {
 		if (!shouldUseCodexAdapter(ctx, state.config)) {
 			return undefined;
 		}
-		const skills = hasNoSkillsFlag() ? [] : resolvePromptSkills(event.systemPromptOptions?.skills, state.promptSkills);
+		const skills = resolvePromptSkills(event.systemPromptOptions?.skills, hasNoSkillsFlag() ? [] : state.promptSkills);
 		return {
 			systemPrompt: buildCodexSystemPrompt(event.systemPrompt, {
 				skills,
