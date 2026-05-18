@@ -18,9 +18,10 @@ import { rewriteCodexProviderRequest } from "./adapter/provider-request.ts";
 import { handleCodexSessionBeforeCompact } from "./adapter/compaction.ts";
 import { isNativeCompactionDetails, NATIVE_COMPACTION_DISPLAY_MESSAGE_TYPE, NATIVE_COMPACTION_DISPLAY_TEXT } from "./adapter/types.ts";
 import { isAdapterContextExcludedCustomMessage } from "./adapter/context-filter.ts";
-import { getCodexSkillPaths } from "./adapter/skills.ts";
+import { getCodexSkillPaths, hasNoSkillsFlag } from "./adapter/skills.ts";
 import type { AdapterState } from "./adapter/state.ts";
 import { registerCodexCommand } from "./codex-settings/command.ts";
+import { WEB_SEARCH_TOOL_NAME } from "./adapter/tool-set.ts";
 
 function getCommandArg(args: unknown): string | undefined {
 	if (!args || typeof args !== "object" || !("cmd" in args) || typeof args.cmd !== "string") {
@@ -44,13 +45,16 @@ export default function codexConversion(pi: ExtensionAPI) {
 	const tracker = createExecCommandTracker();
 	const state: AdapterState = { enabled: false, cwd: process.cwd(), promptSkills: [], config: readCodexConversionConfig() };
 	const sessions = createExecSessionManager();
-	let nativeWebSearchRegistered = false;
+	const registeredNativeWebSearchTools = new Set<string>();
 	let nativeImageGenerationRegistered = false;
 
 	function ensureOptionalNativeToolsRegistered(config = state.config): void {
-		if (config.webSearch && !nativeWebSearchRegistered) {
-			registerWebSearchTool(pi);
-			nativeWebSearchRegistered = true;
+		if (config.webSearch) {
+			const webSearchToolName = WEB_SEARCH_TOOL_NAME;
+			if (!registeredNativeWebSearchTools.has(webSearchToolName)) {
+				registerWebSearchTool(pi, webSearchToolName);
+				registeredNativeWebSearchTools.add(webSearchToolName);
+			}
 		}
 		if (config.imageGeneration && !nativeImageGenerationRegistered) {
 			registerImageGenerationTool(pi);
@@ -93,6 +97,7 @@ export default function codexConversion(pi: ExtensionAPI) {
 	});
 
 	pi.on("resources_discover", async (event) => {
+		if (hasNoSkillsFlag()) return undefined;
 		const skillPaths = getCodexSkillPaths(event.cwd);
 		return skillPaths.length > 0 ? { skillPaths } : undefined;
 	});
@@ -134,7 +139,7 @@ export default function codexConversion(pi: ExtensionAPI) {
 		if (!shouldUseCodexAdapter(ctx, state.config)) {
 			return undefined;
 		}
-		const skills = resolvePromptSkills(event.systemPromptOptions?.skills, state.promptSkills);
+		const skills = hasNoSkillsFlag() ? [] : resolvePromptSkills(event.systemPromptOptions?.skills, state.promptSkills);
 		return {
 			systemPrompt: buildCodexSystemPrompt(event.systemPrompt, {
 				skills,

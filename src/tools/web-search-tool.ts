@@ -2,10 +2,11 @@ import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "@earendil-w
 import { Type } from "typebox";
 import { Container, Text } from "@earendil-works/pi-tui";
 import { isOpenAICodexModel } from "../adapter/codex-model.ts";
+import { WEB_SEARCH_TOOL_NAME } from "../adapter/tool-set.ts";
 
-export const WEB_SEARCH_UNSUPPORTED_MESSAGE = "web_search is only available with the openai-codex provider";
+export const WEB_SEARCH_UNSUPPORTED_MESSAGE = "web.run is only available with the openai-codex provider";
 const WEB_SEARCH_LOCAL_EXECUTION_MESSAGE =
-	"web_search is a native openai-codex provider tool and should not execute locally";
+	"web.run is a native openai-codex provider tool and should not execute locally";
 export const WEB_SEARCH_SESSION_NOTE_TYPE = "codex-web-search-session-note";
 const WEB_SEARCH_MULTIMODAL_CONTENT_TYPES = ["text", "image"] as const;
 
@@ -20,6 +21,7 @@ interface FunctionToolPayload {
 }
 
 interface ResponsesPayload {
+	include?: unknown;
 	tools?: unknown[];
 	[key: string]: unknown;
 }
@@ -43,14 +45,14 @@ export function supportsMultimodalNativeWebSearch(model: ExtensionContext["model
 }
 
 function isWebSearchFunctionTool(tool: unknown): tool is FunctionToolPayload {
-	return !!tool && typeof tool === "object" && (tool as FunctionToolPayload).type === "function" && (tool as FunctionToolPayload).name === "web_search";
+	return !!tool && typeof tool === "object" && (tool as FunctionToolPayload).type === "function" && (tool as FunctionToolPayload).name === WEB_SEARCH_TOOL_NAME;
 }
 
 function createEmptyResultComponent(): Container {
 	return new Container();
 }
 
-export function rewriteNativeWebSearchTool(payload: unknown, model: ExtensionContext["model"]): unknown {
+export function rewriteNativeWebSearchTool(payload: unknown, model: ExtensionContext["model"], toolName: string = WEB_SEARCH_TOOL_NAME): unknown {
 	if (!supportsNativeWebSearch(model) || !payload || typeof payload !== "object") {
 		return payload;
 	}
@@ -62,7 +64,7 @@ export function rewriteNativeWebSearchTool(payload: unknown, model: ExtensionCon
 
 	let rewritten = false;
 	const nextTools = tools.map((tool) => {
-		if (!isWebSearchFunctionTool(tool)) {
+		if (!isWebSearchFunctionTool(tool) || tool.name !== toolName) {
 			return tool;
 		}
 		rewritten = true;
@@ -80,17 +82,28 @@ export function rewriteNativeWebSearchTool(payload: unknown, model: ExtensionCon
 	if (!rewritten) {
 		return payload;
 	}
+	const existingInclude: unknown[] = Array.isArray((payload as ResponsesPayload).include)
+		? [...((payload as ResponsesPayload).include as unknown[])]
+		: [];
+	const include = [
+		...existingInclude,
+		...[
+			"web_search_call.action.sources",
+			"web_search_call.results",
+		].filter((item) => !existingInclude.includes(item)),
+	];
 
 	return {
 		...(payload as ResponsesPayload),
+		include,
 		tools: nextTools,
 	};
 }
 
-export function createWebSearchTool(): ToolDefinition<typeof WEB_SEARCH_PARAMETERS> {
+export function createWebSearchTool(name: string = WEB_SEARCH_TOOL_NAME): ToolDefinition<typeof WEB_SEARCH_PARAMETERS> {
 	return {
-		name: "web_search",
-		label: "web_search",
+		name,
+		label: name,
 		description:
 			"Search the web for sources relevant to the current task. Use it when you need up-to-date information, external references, or broader context beyond the workspace.",
 		promptSnippet:
@@ -104,7 +117,7 @@ export function createWebSearchTool(): ToolDefinition<typeof WEB_SEARCH_PARAMETE
 			throw new Error(WEB_SEARCH_LOCAL_EXECUTION_MESSAGE);
 		},
 		renderCall(_args, theme) {
-			return new Text(`${theme.fg("toolTitle", theme.bold("web_search"))}`, 0, 0);
+			return new Text(`${theme.fg("toolTitle", theme.bold(name))}`, 0, 0);
 		},
 		renderResult(result, { expanded }, theme) {
 			if (!expanded) {
@@ -117,6 +130,6 @@ export function createWebSearchTool(): ToolDefinition<typeof WEB_SEARCH_PARAMETE
 	};
 }
 
-export function registerWebSearchTool(pi: ExtensionAPI): void {
-	pi.registerTool(createWebSearchTool());
+export function registerWebSearchTool(pi: ExtensionAPI, name: string = WEB_SEARCH_TOOL_NAME): void {
+	pi.registerTool(createWebSearchTool(name));
 }

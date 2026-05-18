@@ -10,6 +10,7 @@ export const COMPACTION_MODELS: readonly CompactionModel[] = ["gpt-5.5", "gpt-5.
 export const COMPACTION_REASONING_LEVELS: readonly CompactionReasoning[] = ["current", "minimal", "low", "medium", "high", "xhigh"];
 
 export interface CodexConversionConfig {
+	applyPatchOnly: boolean;
 	fast: boolean;
 	imageGeneration: boolean;
 	compactionModel: CompactionModel;
@@ -23,6 +24,7 @@ export interface CodexConversionConfig {
 
 export const CODEX_CONVERSION_CONFIG_BASENAME = "pi-codex-conversion.json";
 export const DEFAULT_CODEX_CONVERSION_CONFIG: CodexConversionConfig = {
+	applyPatchOnly: false,
 	fast: false,
 	imageGeneration: true,
 	compactionModel: "gpt-5.5",
@@ -68,6 +70,7 @@ export function readCodexConversionConfig(configPath: string = getCodexConversio
 		const parsed = JSON.parse(readFileSync(configPath, "utf-8")) as unknown;
 		if (!isObject(parsed)) return { ...DEFAULT_CODEX_CONVERSION_CONFIG };
 		return {
+			applyPatchOnly: typeof parsed.applyPatchOnly === "boolean" ? parsed.applyPatchOnly : DEFAULT_CODEX_CONVERSION_CONFIG.applyPatchOnly,
 			fast: typeof parsed.fast === "boolean" ? parsed.fast : DEFAULT_CODEX_CONVERSION_CONFIG.fast,
 			imageGeneration: typeof parsed.imageGeneration === "boolean" ? parsed.imageGeneration : DEFAULT_CODEX_CONVERSION_CONFIG.imageGeneration,
 			compactionModel: normalizeCompactionModel(parsed.compactionModel) ?? DEFAULT_CODEX_CONVERSION_CONFIG.compactionModel,
