@@ -269,6 +269,13 @@ function toReplayAgentMessage(entry: SessionEntry): AgentMessage | undefined {
 	return undefined;
 }
 
+function toPiReplayAgentMessage(entry: SessionEntry): AgentMessage | undefined {
+	if (entry.type === "message") return toSessionMessage(entry);
+	if (entry.type === "custom_message") return toCustomMessage(entry);
+	if (entry.type === "branch_summary") return toBranchSummaryMessage(entry);
+	return undefined;
+}
+
 function isPromptEnvelopeItem(item: unknown): item is ResponsesInputMessageItem {
 	return isResponsesInputMessageItem(item) && isPreambleRole(item.role);
 }
@@ -319,6 +326,15 @@ export function collectReplayMessages(entries: readonly SessionEntry[]): AgentMe
 		}
 	}
 
+	return messages;
+}
+
+function collectPiReplayMessages(entries: readonly SessionEntry[]): AgentMessage[] {
+	const messages: AgentMessage[] = [];
+	for (const entry of entries) {
+		const message = toPiReplayAgentMessage(entry);
+		if (message) messages.push(message);
+	}
 	return messages;
 }
 
@@ -437,8 +453,12 @@ function buildNativeReplaySegmentsInternal<TApi extends Api>(args: {
 
 	const preCompactionEntries = args.branchEntries.slice(firstKeptEntryIndex, boundaryIndex);
 	const postCompactionEntries = args.branchEntries.slice(boundaryIndex + 1);
-	const preCompactionKeptMessages = collectReplayMessages(preCompactionEntries);
-	const postCompactionTailMessages = collectReplayMessages(postCompactionEntries);
+	// Pi's stock replay includes all custom_message entries. Match that exactly for
+	// parity/slicing, then omit adapter display-only messages from the context we
+	// install in the rewritten native replay payload.
+	const preCompactionKeptMessages = collectPiReplayMessages(preCompactionEntries);
+	const postCompactionTailMessages = collectPiReplayMessages(postCompactionEntries);
+	const contextPostCompactionTailMessages = collectReplayMessages(postCompactionEntries);
 	const compactionSummaryMessage = createCompactionSummaryAgentMessage(args.compactionEntry);
 	const serializedPiHistoryInput = serializeMessagesToResponsesInput(args.model, [
 		compactionSummaryMessage,
@@ -480,6 +500,7 @@ function buildNativeReplaySegmentsInternal<TApi extends Api>(args: {
 		),
 	);
 	const actualPostCompactionTail = cloneResponsesInputSlice(args.payload.input.slice(tailStartIndex, tailEndIndex));
+	const contextPostCompactionTail = serializeMessagesToResponsesInput(args.model, contextPostCompactionTailMessages);
 	if (!actualCompactionSummary || !actualPreCompactionKeptWindow || !actualPostCompactionTail) {
 		return {
 			ok: false,
@@ -494,8 +515,8 @@ function buildNativeReplaySegmentsInternal<TApi extends Api>(args: {
 	);
 	const postCompactionTail = createReplaySlice(
 		postCompactionEntries,
-		postCompactionTailMessages,
-		actualPostCompactionTail,
+		contextPostCompactionTailMessages,
+		contextPostCompactionTail,
 	);
 
 	return {
@@ -514,7 +535,7 @@ function buildNativeReplaySegmentsInternal<TApi extends Api>(args: {
 			replayInput: [
 				...freshPreamble.leadingInput,
 				...compactedWindow,
-				...actualPostCompactionTail,
+				...contextPostCompactionTail,
 				...freshPreamble.trailingInput,
 			],
 		},
@@ -524,7 +545,7 @@ function buildNativeReplaySegmentsInternal<TApi extends Api>(args: {
 			input: [
 				...freshPreamble.leadingInput,
 				...compactedWindow,
-				...actualPostCompactionTail,
+				...contextPostCompactionTail,
 				...freshPreamble.trailingInput,
 			],
 		},
