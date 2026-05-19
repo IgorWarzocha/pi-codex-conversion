@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.6.0
+## 1.5.7
 
 - Fixed OpenAI Codex custom-provider requests so synthetic `web.run` and `image_generation` adapter tools are rewritten to native Responses tool payloads before sending.
 - Fixed subagent and other RPC/no-session Codex runs failing with invalid function tool names when native web search is active.
