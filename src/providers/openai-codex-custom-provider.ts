@@ -21,6 +21,8 @@ import {
 	processResponsesStream,
 } from "./openai-responses-shared.ts";
 import { WEB_SEARCH_TOOL_NAME } from "../adapter/tool-set.ts";
+import { rewriteNativeImageGenerationTool } from "../tools/image-generation-tool.ts";
+import { rewriteNativeWebSearchTool } from "../tools/web-search-tool.ts";
 
 const DEFAULT_CODEX_BASE_URL = "https://chatgpt.com/backend-api";
 const JWT_CLAIM_PATH = "https://api.openai.com/auth";
@@ -600,6 +602,9 @@ export function buildRequestBody<TApi extends Api>(model: Model<TApi>, context: 
 		if (hasWebSearchTool) {
 			body.include.push("web_search_call.action.sources", "web_search_call.results");
 		}
+		const rewrittenBody = rewriteNativeImageGenerationTool(rewriteNativeWebSearchTool(body, model), model) as ResponsesBody;
+		body.tools = rewrittenBody.tools;
+		body.include = rewrittenBody.include ?? body.include;
 	}
 
 	const clampedReasoning = options?.reasoning ? clampThinkingLevel(model, options.reasoning) : undefined;
