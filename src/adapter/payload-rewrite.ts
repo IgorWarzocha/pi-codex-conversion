@@ -453,9 +453,6 @@ function buildNativeReplaySegmentsInternal<TApi extends Api>(args: {
 
 	const preCompactionEntries = args.branchEntries.slice(firstKeptEntryIndex, boundaryIndex);
 	const postCompactionEntries = args.branchEntries.slice(boundaryIndex + 1);
-	// Pi's stock replay includes all custom_message entries. Match that exactly for
-	// parity/slicing, then omit adapter display-only messages from the context we
-	// install in the rewritten native replay payload.
 	const preCompactionKeptMessages = collectPiReplayMessages(preCompactionEntries);
 	const postCompactionTailMessages = collectPiReplayMessages(postCompactionEntries);
 	const contextPostCompactionTailMessages = collectReplayMessages(postCompactionEntries);
