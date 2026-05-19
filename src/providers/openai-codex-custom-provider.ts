@@ -21,6 +21,8 @@ import {
 	processResponsesStream,
 } from "./openai-responses-shared.ts";
 import { WEB_SEARCH_TOOL_NAME } from "../adapter/tool-set.ts";
+import { rewriteNativeImageGenerationTool } from "../tools/image-generation-tool.ts";
+import { rewriteNativeWebSearchTool } from "../tools/web-search-tool.ts";
 
 const DEFAULT_CODEX_BASE_URL = "https://chatgpt.com/backend-api";
 const JWT_CLAIM_PATH = "https://api.openai.com/auth";
@@ -1538,6 +1540,7 @@ function createCodexStream<TApi extends Api>(
 	options: SimpleStreamOptions | undefined,
 	deps: {
 		getCurrentCwd: () => string;
+		getNativeToolRewriteConfig?: () => { webSearch: boolean; imageGeneration: boolean };
 		onImageSaved?: (savedImage: SavedGeneratedImage, imageData: { data: string; mimeType: string }) => void;
 		onWebSearchCaptured?: (search: SurfacedWebSearch) => void;
 	},
@@ -1560,6 +1563,13 @@ function createCodexStream<TApi extends Api>(
 			const nextBody = await options?.onPayload?.(body, model);
 			if (nextBody !== undefined) {
 				body = nextBody as ResponsesBody;
+			}
+			const nativeToolRewriteConfig = deps.getNativeToolRewriteConfig?.();
+			if (nativeToolRewriteConfig?.webSearch) {
+				body = rewriteNativeWebSearchTool(body, model) as ResponsesBody;
+			}
+			if (nativeToolRewriteConfig?.imageGeneration) {
+				body = rewriteNativeImageGenerationTool(body, model) as ResponsesBody;
 			}
 
 			const websocketRequestId = options?.sessionId || createCodexRequestId();
@@ -1692,7 +1702,7 @@ function createCodexStream<TApi extends Api>(
 	return stream;
 }
 
-export function registerOpenAICodexCustomProvider(pi: ExtensionAPI, options: { getCurrentCwd: () => string }): void {
+export function registerOpenAICodexCustomProvider(pi: ExtensionAPI, options: { getCurrentCwd: () => string; getNativeToolRewriteConfig?: () => { webSearch: boolean; imageGeneration: boolean } }): void {
 	const pendingActivities: PendingActivity[] = [];
 	const imagePreviewCache = new Map<string, CachedImagePreview>();
 	let pendingFlushTimer: ReturnType<typeof setTimeout> | undefined;
@@ -1754,6 +1764,7 @@ export function registerOpenAICodexCustomProvider(pi: ExtensionAPI, options: { g
 		streamSimple: (model, context, streamOptions) =>
 			createCodexStream(model, context, streamOptions, {
 				getCurrentCwd: options.getCurrentCwd,
+				getNativeToolRewriteConfig: options.getNativeToolRewriteConfig,
 				onImageSaved: (savedImage, imageData) => {
 					pendingActivities.push({ kind: "image", savedImage, imageData });
 				},
