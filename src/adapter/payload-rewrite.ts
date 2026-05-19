@@ -562,7 +562,6 @@ function buildNativeReplaySegmentsInternal<TApi extends Api>(args: {
 	const trailingPreambleCount = freshPreamble.trailingInput.length;
 	const compactionSummaryCount = serializeMessagesToResponsesInput(args.model, [compactionSummaryMessage]).length;
 	const preCompactionKeptCount = replayMatch.preCompactionKept.input.length;
-	const tailStartIndex = freshPreambleCount + compactionSummaryCount + preCompactionKeptCount;
 	const tailEndIndex = args.payload.input.length - trailingPreambleCount;
 	const actualCompactionSummary = cloneResponsesInputSlice(
 		args.payload.input.slice(freshPreambleCount, freshPreambleCount + compactionSummaryCount),
