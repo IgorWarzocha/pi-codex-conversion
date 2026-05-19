@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.5.8
+
+- Fixed native Responses compaction replay after compaction display messages so requests replace Pi placeholder compaction context with the native compacted window instead of failing parity checks.
+
 ## 1.5.7
 
 - Fixed OpenAI Codex custom-provider requests so synthetic `web.run` and `image_generation` adapter tools are rewritten to native Responses tool payloads before sending.
