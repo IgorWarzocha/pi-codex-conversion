@@ -602,9 +602,6 @@ export function buildRequestBody<TApi extends Api>(model: Model<TApi>, context: 
 		if (hasWebSearchTool) {
 			body.include.push("web_search_call.action.sources", "web_search_call.results");
 		}
-		const rewrittenBody = rewriteNativeImageGenerationTool(rewriteNativeWebSearchTool(body, model), model) as ResponsesBody;
-		body.tools = rewrittenBody.tools;
-		body.include = rewrittenBody.include ?? body.include;
 	}
 
 	const clampedReasoning = options?.reasoning ? clampThinkingLevel(model, options.reasoning) : undefined;
@@ -1543,6 +1540,7 @@ function createCodexStream<TApi extends Api>(
 	options: SimpleStreamOptions | undefined,
 	deps: {
 		getCurrentCwd: () => string;
+		getNativeToolRewriteConfig?: () => { webSearch: boolean; imageGeneration: boolean };
 		onImageSaved?: (savedImage: SavedGeneratedImage, imageData: { data: string; mimeType: string }) => void;
 		onWebSearchCaptured?: (search: SurfacedWebSearch) => void;
 	},
@@ -1565,6 +1563,13 @@ function createCodexStream<TApi extends Api>(
 			const nextBody = await options?.onPayload?.(body, model);
 			if (nextBody !== undefined) {
 				body = nextBody as ResponsesBody;
+			}
+			const nativeToolRewriteConfig = deps.getNativeToolRewriteConfig?.();
+			if (nativeToolRewriteConfig?.webSearch) {
+				body = rewriteNativeWebSearchTool(body, model) as ResponsesBody;
+			}
+			if (nativeToolRewriteConfig?.imageGeneration) {
+				body = rewriteNativeImageGenerationTool(body, model) as ResponsesBody;
 			}
 
 			const websocketRequestId = options?.sessionId || createCodexRequestId();
@@ -1697,7 +1702,7 @@ function createCodexStream<TApi extends Api>(
 	return stream;
 }
 
-export function registerOpenAICodexCustomProvider(pi: ExtensionAPI, options: { getCurrentCwd: () => string }): void {
+export function registerOpenAICodexCustomProvider(pi: ExtensionAPI, options: { getCurrentCwd: () => string; getNativeToolRewriteConfig?: () => { webSearch: boolean; imageGeneration: boolean } }): void {
 	const pendingActivities: PendingActivity[] = [];
 	const imagePreviewCache = new Map<string, CachedImagePreview>();
 	let pendingFlushTimer: ReturnType<typeof setTimeout> | undefined;
@@ -1759,6 +1764,7 @@ export function registerOpenAICodexCustomProvider(pi: ExtensionAPI, options: { g
 		streamSimple: (model, context, streamOptions) =>
 			createCodexStream(model, context, streamOptions, {
 				getCurrentCwd: options.getCurrentCwd,
+				getNativeToolRewriteConfig: options.getNativeToolRewriteConfig,
 				onImageSaved: (savedImage, imageData) => {
 					pendingActivities.push({ kind: "image", savedImage, imageData });
 				},
