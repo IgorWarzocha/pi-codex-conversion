@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.5.9
+
+- Fixed native Responses compaction replay when provider payloads include in-flight tail items that are not yet persisted in the session branch.
+
 ## 1.5.8
 
 - Fixed native Responses compaction replay after compaction display messages so requests replace Pi placeholder compaction context with the native compacted window instead of failing parity checks.
